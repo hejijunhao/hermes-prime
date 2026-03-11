@@ -1,9 +1,101 @@
 # Hermes Hunter — Changelog
 
+- **1.6.0** — Budget/model tools: `budget_status`, `hunter_model_set` — all 13 Overseer tools now complete
+- **1.5.0** — Code modification tools: `hunter_code_read`, `hunter_code_edit`, `hunter_diff`, `hunter_rollback`, `hunter_redeploy`
+- **1.4.0** — Overseer injection tools: `hunter_inject`, `hunter_interrupt`, `hunter_logs` registered in `hunter-overseer` toolset
 - **1.3.0** — Overseer process tools: `hunter_spawn`, `hunter_kill`, `hunter_status` registered in `hunter-overseer` toolset
 - **1.2.0** — Elephantasm memory integration: `AnimaManager`, `OverseerMemoryBridge`, `HunterMemoryBridge`
 - **1.1.0** — Phase 1 foundation: package scaffolding, budget system, worktree manager, process controller
 - **1.0.0** — Foundation fork of Hermes Agent + architecture design
+
+---
+
+## 1.6.0 — Budget & Model Tools (Task 9)
+
+**Date:** 2026-03-11
+
+Budget visibility and model tier control — the Overseer can now check spending and switch the Hunter's LLM model for cost optimisation.
+
+### Task 9: Overseer Tools — Budget & Model Management
+
+Registered `budget_status` and `hunter_model_set` as Hermes tools in the `hunter-overseer` toolset.
+
+**What was built:**
+
+- **`hunter/tools/budget_tools.py`** (~215 lines) — two tool handlers + controller singleton + Elephantasm helper + model path helper:
+  - `budget_status` — reloads config (picks up human edits), returns full `BudgetStatus` dict with `summary`, `recent_spend` (last 5 entries), and `daily_breakdown`. Single call gives the Overseer full context for model-switching decisions.
+  - `hunter_model_set` — persists model to `~/.hermes/hunter/model_override.txt` (survives restarts). Optional `apply_immediately` triggers redeploy with the new model. Graceful failure: if redeploy fails, model file is still written and `redeployment_error` is returned. Contextual `note` field tells the Overseer when the change takes effect.
+  - `_get_model_override_path()` — returns `~/.hermes/hunter/model_override.txt`.
+
+- **`model_tools.py`** — added `hunter.tools.budget_tools` to the `_modules` discovery list
+
+**Design decisions:**
+- File-based model persistence: survives both Hunter and Overseer restarts
+- Proactive response enrichment: budget_status returns spend history + daily breakdown in one call
+- Graceful redeploy failure: model file written even if redeploy fails on budget exhaustion
+
+**Tests:** 27/27 passing — controller singleton (3), budget_status (6: normal/exhausted/alert/spend/daily/no-ledger), hunter_model_set (8: basic/missing/empty/old-model/immediate-running/immediate-not-running/budget-error/note/elephantasm), model override path (2), tool registration (4), dispatch integration (3).
+
+---
+
+## 1.5.0 — Code Modification Tools (Task 8)
+
+**Date:** 2026-03-11
+
+The Overseer's "hard intervention" mechanism — read, edit, diff, rollback, and redeploy the Hunter's codebase.
+
+### Task 8: Overseer Tools — Code Modification
+
+Registered `hunter_code_read`, `hunter_code_edit`, `hunter_diff`, `hunter_rollback`, `hunter_redeploy` as Hermes tools in the `hunter-overseer` toolset.
+
+**What was built:**
+
+- **`hunter/tools/code_tools.py`** (~310 lines) — five tool handlers + controller singleton + Elephantasm helper:
+  - `hunter_code_read` — reads a file from the worktree. Returns `{path, content, size_bytes}`. Handles `FileNotFoundError` and `WorktreeError`.
+  - `hunter_code_edit` — find-and-replace + auto-commit. `old_string` must appear exactly once (ambiguous edits rejected). Empty `old_string` creates a new file via `write_file()`. Each edit is a separate git commit with default message `"overseer: edit {path}"` or custom `commit_message`.
+  - `hunter_diff` — shows unstaged changes by default. `staged=true` for staged only. `since_commit` for historical comparison (takes priority over `staged`). Includes `empty` boolean for LLM convenience.
+  - `hunter_rollback` — hard-resets worktree to a specified commit. Returns the new HEAD. Falls back to input hash if `get_head_commit()` fails after reset.
+  - `hunter_redeploy` — kills current Hunter and restarts from updated worktree. Defaults to `resume_session=true` (preserves continuity, unlike `hunter_spawn`). Accepts optional `model` override.
+
+- **`model_tools.py`** — added `hunter.tools.code_tools` to the `_modules` discovery list
+
+**Design decisions:**
+- Edit-only (no full-file write): safer, auditable, mirrors Claude Code's Edit tool
+- New files via `old_string=""`: keeps one tool with clear semantics
+- `since_commit` priority: avoids confusing `staged + since_commit` combination
+- Broad exception handling: catches `Exception` not just `WorktreeError` for robustness
+
+**Tests:** 49/49 passing — controller singleton (3), hunter_code_read (6: normal/missing/empty/not-found/worktree-error/utf8-size), hunter_code_edit (13: normal/create/missing-path/missing-old/missing-new/identical/not-found/ambiguous/file-not-found/custom-commit/default-commit/elephantasm/commit-failure), hunter_diff (6: unstaged/staged/since-commit/empty/worktree-error/invalid-commit), hunter_rollback (6: valid/missing/empty/invalid/elephantasm/head-failure), hunter_redeploy (5: defaults/no-resume/model/budget-error/elephantasm), tool registration (5), dispatch integration (5).
+
+---
+
+## 1.4.0 — Overseer Injection Tools (Task 7)
+
+**Date:** 2026-03-11
+
+Runtime injection and monitoring tools — the Overseer can now steer the Hunter at runtime without redeploying.
+
+### Task 7: Overseer Tools — Runtime Injection
+
+Registered `hunter_inject`, `hunter_interrupt`, `hunter_logs` as Hermes tools in the `hunter-overseer` toolset.
+
+**What was built:**
+
+- **`hunter/tools/inject_tools.py`** (~240 lines) — three tool handlers + lazy controller singleton + Elephantasm helper:
+  - `hunter_inject` — writes an instruction to `~/.hermes/hunter/injections/current.md` with priority prefix (normal/high/critical). The Hunter's step_callback consumes it on its next iteration. Validates instruction presence and priority value.
+  - `hunter_interrupt` — writes an interrupt flag file, waits up to 30s for graceful exit via the Hunter's step_callback, then falls back to `controller.kill()`. Handles race condition where `controller.current` becomes None between checks.
+  - `hunter_logs` — returns recent Hunter output from the in-memory rolling buffer via `controller.get_logs()`. Includes `hunter_running` status in response.
+  - `_extract_overseer_event()` — best-effort Elephantasm logging. Creates a temporary `OverseerMemoryBridge`, extracts, closes. All exceptions caught at debug level.
+
+- **`model_tools.py`** — added `hunter.tools.inject_tools` to the `_modules` discovery list
+
+**Design decisions:**
+- File-based IPC for injection: Overseer writes, Hunter polls each iteration. Simpler than sockets/pipes, survives process restarts
+- Priority validation in handler: invalid values return structured error, keeping the LLM in control
+- Interrupt uses `controller.current` property (public API) instead of `_current`
+- Separate controller singleton per tool module: consistent pattern, clean test isolation
+
+**Tests:** 33/33 passing — controller singleton (3: lazy init, caching, test override), hunter_inject (10: all priorities, missing/empty/invalid args, dir creation, overwrite, Elephantasm logging + error resilience), hunter_interrupt (6: no hunter, graceful exit, force kill, default message, flag file write, race condition), hunter_logs (4: default tail, custom tail, empty, JSON structure), tool registration (6: registry presence, toolset, schemas, OpenAI format), dispatch integration (4: inject/interrupt/logs via dispatch, exception handling).
 
 ---
 

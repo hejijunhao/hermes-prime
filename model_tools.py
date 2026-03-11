@@ -97,6 +97,9 @@ def _discover_tools():
         "tools.homeassistant_tool",
         # Hunter subsystem (optional — import errors are silently ignored)
         "hunter.tools.process_tools",
+        "hunter.tools.inject_tools",
+        "hunter.tools.code_tools",
+        "hunter.tools.budget_tools",
     ]
     import importlib
     for mod_name in _modules:
