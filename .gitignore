@@ -49,3 +49,5 @@ cli-config.yaml
 skills/.hub/
 ignored/
 .worktrees/
+.claude/
+CLAUDE.md
