@@ -287,13 +287,8 @@ def _cmd_spawn(args) -> None:
         print("Use 'hermes hunter kill' first.")
         sys.exit(1)
 
-    from hunter.budget import BudgetManager
-    from hunter.control import HunterController
-    from hunter.worktree import WorktreeManager
-
-    wt = WorktreeManager()
-    budget = BudgetManager()
-    controller = HunterController(worktree=wt, budget=budget)
+    from hunter.backends import create_controller
+    controller = create_controller()
 
     try:
         proc = controller.spawn(

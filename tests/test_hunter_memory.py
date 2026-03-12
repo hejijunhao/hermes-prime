@@ -72,33 +72,33 @@ class TestAnimaManager:
             with patch("hunter.memory._HAS_ELEPHANTASM", True):
                 result = AnimaManager.ensure_animas(cache_path=anima_cache)
 
-        assert result["hermes-overseer"] == "overseer-uuid-123"
-        assert result["hermes-hunter"] == "hunter-uuid-456"
+        assert result["hermes-prime"] == "overseer-uuid-123"
+        assert result["hermes-prime-hunter"] == "hunter-uuid-456"
         assert mock_client.create_anima.call_count == 2
         mock_client.close.assert_called_once()
 
         # Verify cache file was written
         cached = json.loads(anima_cache.read_text())
-        assert cached["hermes-overseer"] == "overseer-uuid-123"
+        assert cached["hermes-prime"] == "overseer-uuid-123"
 
     def test_ensure_animas_uses_cache(self, anima_cache):
         """If both IDs are cached, no API calls are made."""
         from hunter.memory import AnimaManager
 
         anima_cache.write_text(json.dumps({
-            "hermes-overseer": "cached-o",
-            "hermes-hunter": "cached-h",
+            "hermes-prime": "cached-o",
+            "hermes-prime-hunter": "cached-h",
         }))
 
         result = AnimaManager.ensure_animas(cache_path=anima_cache)
-        assert result["hermes-overseer"] == "cached-o"
-        assert result["hermes-hunter"] == "cached-h"
+        assert result["hermes-prime"] == "cached-o"
+        assert result["hermes-prime-hunter"] == "cached-h"
 
     def test_ensure_animas_partial_cache(self, anima_cache):
         """If only one Anima is cached, only the missing one is created."""
         from hunter.memory import AnimaManager
 
-        anima_cache.write_text(json.dumps({"hermes-overseer": "cached-o"}))
+        anima_cache.write_text(json.dumps({"hermes-prime": "cached-o"}))
 
         mock_client = MagicMock()
         hunter_anima = MagicMock()
@@ -109,8 +109,8 @@ class TestAnimaManager:
             with patch("hunter.memory._HAS_ELEPHANTASM", True):
                 result = AnimaManager.ensure_animas(cache_path=anima_cache)
 
-        assert result["hermes-overseer"] == "cached-o"
-        assert result["hermes-hunter"] == "new-hunter-id"
+        assert result["hermes-prime"] == "cached-o"
+        assert result["hermes-prime-hunter"] == "new-hunter-id"
         mock_client.create_anima.assert_called_once()
 
     def test_ensure_animas_handles_create_failure(self, anima_cache):
@@ -124,8 +124,8 @@ class TestAnimaManager:
             with patch("hunter.memory._HAS_ELEPHANTASM", True):
                 result = AnimaManager.ensure_animas(cache_path=anima_cache)
 
-        assert "hermes-overseer" not in result
-        assert "hermes-hunter" not in result
+        assert "hermes-prime" not in result
+        assert "hermes-prime-hunter" not in result
 
     def test_ensure_animas_no_elephantasm(self, anima_cache):
         """If elephantasm isn't installed, returns empty dict."""
@@ -140,8 +140,8 @@ class TestAnimaManager:
         """get_anima_id returns the cached ID."""
         from hunter.memory import AnimaManager
 
-        anima_cache.write_text(json.dumps({"hermes-overseer": "abc-123"}))
-        assert AnimaManager.get_anima_id("hermes-overseer", cache_path=anima_cache) == "abc-123"
+        anima_cache.write_text(json.dumps({"hermes-prime": "abc-123"}))
+        assert AnimaManager.get_anima_id("hermes-prime", cache_path=anima_cache) == "abc-123"
 
     def test_get_anima_id_missing(self, anima_cache):
         """get_anima_id returns None for unknown names."""
@@ -154,14 +154,14 @@ class TestAnimaManager:
         """get_anima_id returns None if cache file doesn't exist."""
         from hunter.memory import AnimaManager
 
-        assert AnimaManager.get_anima_id("hermes-overseer", cache_path=anima_cache) is None
+        assert AnimaManager.get_anima_id("hermes-prime", cache_path=anima_cache) is None
 
     def test_corrupt_cache_handled(self, anima_cache):
         """Corrupt cache file is handled gracefully."""
         from hunter.memory import AnimaManager
 
         anima_cache.write_text("not valid json {{{")
-        result = AnimaManager.get_anima_id("hermes-overseer", cache_path=anima_cache)
+        result = AnimaManager.get_anima_id("hermes-prime", cache_path=anima_cache)
         assert result is None
 
 

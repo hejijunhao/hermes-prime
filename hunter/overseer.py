@@ -37,9 +37,7 @@ from hunter.config import (
     OVERSEER_MAX_ITERATIONS_PER_LOOP,
     ensure_hunter_home,
 )
-from hunter.control import HunterController
 from hunter.memory import AnimaManager, OverseerMemoryBridge
-from hunter.worktree import WorktreeManager
 
 logger = logging.getLogger(__name__)
 
@@ -186,14 +184,14 @@ class OverseerLoop:
         ensure_hunter_home()
 
         # Create shared infrastructure
-        worktree = WorktreeManager()
-
         if self.budget is None:
             self.budget = BudgetManager()
 
-        self._controller = self.controller or HunterController(
-            worktree=worktree, budget=self.budget,
-        )
+        if self.controller is not None:
+            self._controller = self.controller
+        else:
+            from hunter.backends import create_controller
+            self._controller = create_controller(budget=self.budget)
 
         # Inject shared controller into all tool modules so they see the
         # same Hunter process. Without this, each module's lazy singleton
@@ -213,8 +211,8 @@ class OverseerLoop:
         self.budget.create_default_config()
 
         # Ensure worktree is set up
-        if not worktree.is_setup():
-            worktree.setup()
+        if not self._controller.worktree.is_setup():
+            self._controller.worktree.setup()
 
         # Initialise memory bridge (non-fatal)
         if self.memory is None:

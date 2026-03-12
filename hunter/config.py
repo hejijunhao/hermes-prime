@@ -87,7 +87,7 @@ HUNTER_BRANCH = "hunter/live"
 # =============================================================================
 
 # The toolset the Hunter agent runs with. In Phase 1 this is the standard
-# CLI toolset; Phase 2 will add a dedicated "hermes-hunter" toolset with
+# CLI toolset; Phase 2 will add a dedicated "hermes-prime" toolset with
 # security-specific tools.
 HUNTER_DEFAULT_TOOLSETS = ["hermes-cli"]
 
@@ -103,8 +103,8 @@ HUNTER_MAX_ITERATIONS = 200
 # Elephantasm
 # =============================================================================
 
-OVERSEER_ANIMA_NAME = "hermes-overseer"
-HUNTER_ANIMA_NAME = "hermes-hunter"
+OVERSEER_ANIMA_NAME = "hermes-prime"
+HUNTER_ANIMA_NAME = "hermes-prime-hunter"
 
 
 # =============================================================================

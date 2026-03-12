@@ -135,101 +135,107 @@ def overseer(mock_budget, mock_memory, mock_controller, mock_agent):
 # =============================================================================
 
 class TestSetup:
+    """Tests for OverseerLoop._setup().
+
+    After Phase A, the overseer uses ``create_controller()`` from
+    ``hunter.backends`` instead of constructing WorktreeManager and
+    HunterController directly. Tests patch the factory accordingly.
+    """
+
+    # Helper to build a mock controller whose .worktree behaves correctly.
+    @staticmethod
+    def _make_mock_controller(worktree_is_setup=True):
+        ctrl = MagicMock()
+        ctrl.worktree.is_setup.return_value = worktree_is_setup
+        return ctrl
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_ensures_hunter_home(self, _agent, _anima, _ctrl, _budget, _wt, mock_ensure):
+    def test_setup_ensures_hunter_home(self, _agent, _anima, _budget, _factory, mock_ensure):
         loop = OverseerLoop()
         loop._setup()
         mock_ensure.assert_called_once()
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_creates_default_budget(self, _agent, _anima, _ctrl, mock_budget_cls, _wt, _ensure):
+    def test_setup_creates_default_budget(self, _agent, _anima, mock_budget_cls, _factory, _ensure):
         mock_budget = mock_budget_cls.return_value
         loop = OverseerLoop()
         loop._setup()
         mock_budget.create_default_config.assert_called_once()
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_ensures_worktree(self, _agent, _anima, _ctrl, _budget, mock_wt_cls, _ensure):
-        mock_wt = mock_wt_cls.return_value
-        mock_wt.is_setup.return_value = False
+    def test_setup_ensures_worktree(self, _agent, _anima, _budget, mock_factory, _ensure):
+        mock_ctrl = self._make_mock_controller(worktree_is_setup=False)
+        mock_factory.return_value = mock_ctrl
         loop = OverseerLoop()
         loop._setup()
-        mock_wt.setup.assert_called_once()
+        mock_ctrl.worktree.setup.assert_called_once()
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_worktree_already_setup(self, _agent, _anima, _ctrl, _budget, mock_wt_cls, _ensure):
-        mock_wt = mock_wt_cls.return_value
-        mock_wt.is_setup.return_value = True
+    def test_setup_worktree_already_setup(self, _agent, _anima, _budget, mock_factory, _ensure):
+        mock_ctrl = self._make_mock_controller(worktree_is_setup=True)
+        mock_factory.return_value = mock_ctrl
         loop = OverseerLoop()
         loop._setup()
-        mock_wt.setup.assert_not_called()
+        mock_ctrl.worktree.setup.assert_not_called()
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_ensures_animas(self, _agent, mock_anima, _ctrl, _budget, _wt, _ensure):
+    def test_setup_ensures_animas(self, _agent, mock_anima, _budget, _factory, _ensure):
         loop = OverseerLoop()
         loop._setup()
         mock_anima.ensure_animas.assert_called_once()
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_anima_failure_nonfatal(self, _agent, mock_anima, _ctrl, _budget, _wt, _ensure):
+    def test_setup_anima_failure_nonfatal(self, _agent, mock_anima, _budget, _factory, _ensure):
         mock_anima.ensure_animas.side_effect = RuntimeError("API down")
         loop = OverseerLoop()
         loop._setup()  # Should not raise
         assert loop._agent is not None
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_creates_agent(self, mock_agent_cls, _anima, _ctrl, _budget, _wt, _ensure):
+    def test_setup_creates_agent(self, mock_agent_cls, _anima, _budget, _factory, _ensure):
         loop = OverseerLoop()
         loop._setup()
         assert loop._agent is not None
         mock_agent_cls.assert_called_once()
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
     def test_setup_injects_controller_into_tool_modules(
-        self, _agent, _anima, mock_ctrl_cls, _budget, _wt, _ensure,
+        self, _agent, _anima, _budget, mock_factory, _ensure,
     ):
-        mock_ctrl = mock_ctrl_cls.return_value
+        mock_ctrl = self._make_mock_controller()
+        mock_factory.return_value = mock_ctrl
         loop = OverseerLoop()
 
         with patch("hunter.tools.process_tools._set_controller") as p_set, \
@@ -241,14 +247,13 @@ class TestSetup:
                 setter.assert_called_once_with(mock_ctrl)
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
     @patch("hunter.overseer.OverseerMemoryBridge")
     def test_setup_memory_bridge_failure_nonfatal(
-        self, mock_bridge, _agent, _anima, _ctrl, _budget, _wt, _ensure,
+        self, mock_bridge, _agent, _anima, _budget, _factory, _ensure,
     ):
         mock_bridge.side_effect = ValueError("No Anima ID")
         loop = OverseerLoop()
@@ -256,16 +261,18 @@ class TestSetup:
         assert loop.memory is None
 
     @patch("hunter.overseer.ensure_hunter_home")
-    @patch("hunter.overseer.WorktreeManager")
+    @patch("hunter.backends.create_controller")
     @patch("hunter.overseer.BudgetManager")
-    @patch("hunter.overseer.HunterController")
     @patch("hunter.overseer.AnimaManager")
     @patch("run_agent.AIAgent")
-    def test_setup_uses_provided_controller(self, _agent, _anima, _ctrl_cls, _budget, _wt, _ensure):
+    def test_setup_uses_provided_controller(self, _agent, _anima, _budget, _factory, _ensure):
         custom_controller = MagicMock()
+        custom_controller.worktree.is_setup.return_value = True
         loop = OverseerLoop(controller=custom_controller)
         loop._setup()
         assert loop._controller is custom_controller
+        # Factory should NOT have been called — we provided our own controller
+        _factory.assert_not_called()
 
 
 # =============================================================================

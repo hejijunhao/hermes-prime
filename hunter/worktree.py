@@ -271,6 +271,13 @@ class WorktreeManager:
         result = self._run_git("diff", f"{commit_hash}..HEAD")
         return result.stdout
 
+    def push(self) -> None:
+        """Push commits to remote. No-op for local worktrees.
+
+        Remote backends (Phase B) will implement actual git push here.
+        """
+        logger.debug("Local worktree: push() is a no-op")
+
     # ── Internal helpers ────────────────────────────────────────────────
 
     def _ensure_branch(self) -> None:

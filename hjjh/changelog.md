@@ -1,5 +1,7 @@
-# Hermes Hunter — Changelog
+# Hermes Prime — Changelog
 
+- **2.1.0** — Rename to Hermes Prime + vision consolidation: A/B experiment naming (Prime vs Alpha), consolidated `hermes-prime.md`, Alpha blueprint
+- **2.0.0** — Backend abstraction: `ControlBackend`/`WorktreeBackend` protocols, controller factory, 6 construction sites consolidated
 - **1.9.0** — CLI integration: `hermes hunter` subcommand tree — setup, overseer, spawn, kill, status, budget, logs
 - **1.8.0** — Overseer main loop: `OverseerLoop` — continuous monitoring, evaluation, and improvement of the Hunter agent
 - **1.7.0** — Overseer system prompt + reference docs: identity, intervention strategy, budget management, decision framework
@@ -10,6 +12,302 @@
 - **1.2.0** — Elephantasm memory integration: `AnimaManager`, `OverseerMemoryBridge`, `HunterMemoryBridge`
 - **1.1.0** — Phase 1 foundation: package scaffolding, budget system, worktree manager, process controller
 - **1.0.0** — Foundation fork of Hermes Agent + architecture design
+
+---
+
+## 2.1.0 — Rename & Vision Consolidation
+
+**Date:** 2026-03-12
+
+Project renamed from **Hermes Hunter** to **Hermes Prime**. Vision consolidated into a single document. A/B experiment established: Hermes Prime (engineered, human-guided) vs Hermes Alpha (stock Hermes, fully autonomous) — same mission, different starting points.
+
+### Rename: Hermes Hunter → Hermes Prime
+
+Renamed project identity and Elephantasm anima constants to reflect the new naming convention.
+
+**What changed:**
+
+- **`hunter/config.py`** — `OVERSEER_ANIMA_NAME = "hermes-prime"`, `HUNTER_ANIMA_NAME = "hermes-prime-hunter"` (was `"hermes-overseer"` / `"hermes-hunter"`)
+- **`tests/test_hunter_memory.py`** — all test fixture data updated to match new anima names
+
+### A/B Experiment Naming Convention
+
+Four agents across two paths, each with distinct identifiers:
+
+| Role | Path A (Guided) | Path B (Autonomous) |
+|------|-----------------|---------------------|
+| Master | Hermes Prime | Hermes Alpha |
+| Hunter | Hermes Hunter | Hermes Alpha Hunter |
+| Fly app (Master) | `hermes-prime` | `hermes-alpha` |
+| Fly app (Hunter) | `hermes-prime-hunter` | `hermes-alpha-hunter` |
+| Elephantasm anima (Master) | `hermes-prime` | `hermes-alpha` |
+| Elephantasm anima (Hunter) | `hermes-prime-hunter` | `hermes-alpha-hunter` |
+
+### Consolidated Vision: `hjjh/hermes-prime.md`
+
+Single source of truth replacing the need to cross-reference `vision.md`, `architecture.md`, and `self-recursive-deployment.md`. Covers: thesis and market analysis, hierarchy (Creator → Master → Hunter), two-agent architecture, infrastructure (Fly machines, repos, Elephantasm, budget), code evolution tiers, self-build bootstrap, the A/B experiment design, feedback loops, safety guardrails, success criteria, and human setup checklist for both paths.
+
+### Alpha Blueprint: `hjjh/alpha-blueprint.md`
+
+Renamed from `overseer-blueprint.md`. This is the instruction manual given to a stock Hermes agent for Path B. All internal references updated to Alpha naming (Fly apps, Elephantasm animas, repos, persistent volume). Written as imperative instructions for an LLM audience — the Alpha Master reads this on boot and bootstraps the entire system with stock tools.
+
+### Completion Report
+
+Full details in `hjjh/completions/rename-and-consolidation.md`.
+
+**Tests:** 3174 passed (42/42 memory tests verified rename). 2 pre-existing failures in unrelated files (`test_timezone.py`, `test_vision_tools.py`).
+
+---
+
+## 2.0.0 — Backend Abstraction (Phase A)
+
+**Date:** 2026-03-12
+
+A pure refactoring release — zero behavior change. Introduces a `ControlBackend`/`WorktreeBackend` protocol layer and a controller factory so that all tool handlers go through a swappable backend. Ships with only the local backend; the Fly.io backend comes in Phase B. Six duplicated 7-line construction blocks consolidated into single factory calls.
+
+### Task A1: Protocol Definitions
+
+Defined `WorktreeBackend` and `ControlBackend` as `typing.Protocol` classes that capture the interfaces tool handlers and the Overseer loop actually use.
+
+**What was built:**
+
+- **`hunter/backends/base.py`** (101 lines) — two `@runtime_checkable` Protocol classes:
+  - `WorktreeBackend` — 2 attributes (`worktree_path: Path`, `branch: str`) + 17 methods:
+    - Setup: `setup()`, `teardown()`, `is_setup()`, `is_clean()`
+    - File ops: `read_file()`, `write_file()`, `edit_file()`, `delete_file()`, `list_files()`
+    - Git ops: `commit()`, `rollback()`, `diff()`, `diff_since()`, `get_head_commit()`, `get_recent_commits()`, `push()`
+  - `ControlBackend` — 2 attributes (`worktree: WorktreeBackend`, `budget: BudgetManager`) + 5 methods (`spawn()`, `kill()`, `redeploy()`, `get_status()`, `get_logs()`) + 3 properties (`is_running`, `current`, `history`)
+  - Import strategy: `from __future__ import annotations` + `TYPE_CHECKING` guard for `HunterStatus`, `HunterProcess`, `BudgetManager`, `CommitInfo`. No runtime imports of `control.py`, `budget.py`, or `worktree.py` — these protocols are for type checking only.
+
+**Design decision — wide protocols:** The plan's original proposal only had `spawn/kill/get_status/get_logs/is_alive` on `ControlBackend`. But tool handlers also access `controller.worktree`, `controller.budget`, `controller.current`, `controller.is_running`, `controller.redeploy()`, and `controller.history`. The protocol matches actual usage, not a minimal ideal. We can narrow it in Phase B when we know what the remote backend actually needs.
+
+### Task A2: WorktreeManager `push()` No-Op
+
+Added `push()` to `WorktreeManager` so it structurally satisfies `WorktreeBackend` without any behavioral change.
+
+**What was built:**
+
+- **`hunter/worktree.py`** — 6 lines added between `diff_since()` and the internal helpers section (lines 274–279):
+  ```python
+  def push(self) -> None:
+      """Push commits to remote. No-op for local worktrees."""
+      logger.debug("Local worktree: push() is a no-op")
+  ```
+  No git operations performed. For Phase B, `FlyWorktreeBackend` will implement actual `git push` here.
+
+### Task A3: Controller Factory
+
+Centralized controller construction in a factory function with backend selection via mode parameter.
+
+**What was built:**
+
+- **`hunter/backends/__init__.py`** (82 lines) — factory function + protocol re-exports:
+  - `create_controller(mode="auto", budget=None) -> HunterController`
+  - Three modes: `"auto"` (detects `FLY_APP_NAME` env var → selects fly or local), `"local"` (subprocess + git worktree on this machine), `"fly"` (raises `NotImplementedError` — Phase B placeholder)
+  - `budget` parameter allows sharing a `BudgetManager` instance — critical for the Overseer loop, which creates its own `BudgetManager` and needs the controller (and all tool modules) to track spend against the same instance
+  - Deferred imports inside the function body (not at module level) to avoid circular dependencies and keep `hunter/` as an optional package
+  - `_VALID_MODES = {"auto", "local", "fly"}` with `ValueError` on unknown modes
+  - Re-exports `ControlBackend` and `WorktreeBackend` for convenience: `from hunter.backends import ControlBackend`
+
+**What the factory replaced — the same 7-line block duplicated in 6 places:**
+```python
+from hunter.budget import BudgetManager
+from hunter.control import HunterController
+from hunter.worktree import WorktreeManager
+worktree = WorktreeManager()
+budget = BudgetManager()
+controller = HunterController(worktree=worktree, budget=budget)
+```
+After Phase A, all 6 become: `from hunter.backends import create_controller; controller = create_controller()`
+
+### Task A4: Update Tool Modules
+
+Replaced the duplicated `_get_controller()` in all 4 tool modules with the factory.
+
+**What was modified (identical change in each):**
+
+- **`hunter/tools/process_tools.py`** (lines 29–46)
+- **`hunter/tools/inject_tools.py`** (lines 32–44)
+- **`hunter/tools/code_tools.py`** (lines 33–45)
+- **`hunter/tools/budget_tools.py`** (lines 29–41)
+
+Before (duplicated 4× = 28 lines total):
+```python
+def _get_controller():
+    global _controller
+    if _controller is None:
+        from hunter.budget import BudgetManager
+        from hunter.control import HunterController
+        from hunter.worktree import WorktreeManager
+        worktree = WorktreeManager()
+        budget = BudgetManager()
+        _controller = HunterController(worktree=worktree, budget=budget)
+    return _controller
+```
+
+After (duplicated 4× = 12 lines total):
+```python
+def _get_controller():
+    global _controller
+    if _controller is None:
+        from hunter.backends import create_controller
+        _controller = create_controller()
+    return _controller
+```
+
+`_set_controller()` stays exactly as-is in all 4 modules — tests depend on it for mock injection, and `OverseerLoop._setup()` uses it to share a single controller across modules.
+
+### Task A5: Update OverseerLoop
+
+Changed `_setup()` to use the factory instead of direct WorktreeManager/HunterController construction.
+
+**What was modified in `hunter/overseer.py`:**
+
+- **Module-level imports** — removed `from hunter.control import HunterController` and `from hunter.worktree import WorktreeManager`. Kept `from hunter.budget import BudgetManager` (still used directly in `_setup()` for the `self.budget is None` default) and `from hunter.memory import AnimaManager, OverseerMemoryBridge`.
+
+- **`_setup()` controller construction** (lines 186–194):
+
+  Before:
+  ```python
+  worktree = WorktreeManager()
+  if self.budget is None:
+      self.budget = BudgetManager()
+  self._controller = self.controller or HunterController(
+      worktree=worktree, budget=self.budget,
+  )
+  ```
+
+  After:
+  ```python
+  if self.budget is None:
+      self.budget = BudgetManager()
+  if self.controller is not None:
+      self._controller = self.controller
+  else:
+      from hunter.backends import create_controller
+      self._controller = create_controller(budget=self.budget)
+  ```
+
+- **Worktree setup check** — changed from local `worktree` variable to `self._controller.worktree`:
+  ```python
+  # Before: if not worktree.is_setup(): worktree.setup()
+  if not self._controller.worktree.is_setup():
+      self._controller.worktree.setup()
+  ```
+
+**Why explicit `if/else` instead of `or`:** The original `self.controller or HunterController(...)` always created a `WorktreeManager()` even when `self.controller` was provided (the local variable was used for the worktree check downstream). The new pattern avoids unnecessary construction and makes the "provided controller" path explicit — when someone passes `controller=mock` in tests, the factory is never called.
+
+**Why `budget=self.budget` is passed:** The factory's `budget` parameter ensures the controller's `BudgetManager` is the same instance the Overseer uses for spend recording. Without this, the factory would create its own `BudgetManager`, causing spend to be tracked in two separate instances (Overseer records to one, budget_status tool reads from another).
+
+### Task A6: Update CLI
+
+Changed `_cmd_spawn()` to use the factory.
+
+**What was modified in `hunter/cli.py`** (lines 290–291):
+
+Before:
+```python
+from hunter.budget import BudgetManager
+from hunter.control import HunterController
+from hunter.worktree import WorktreeManager
+wt = WorktreeManager()
+budget = BudgetManager()
+controller = HunterController(worktree=wt, budget=budget)
+```
+
+After:
+```python
+from hunter.backends import create_controller
+controller = create_controller()
+```
+
+**What was NOT changed:**
+- `_cmd_setup()` — bootstrapping operation that must work before the full system is ready. Creates `WorktreeManager` and `BudgetManager` directly for idempotent setup.
+- `_cmd_status()`, `_cmd_budget()`, `_cmd_logs()` — stateless CLI commands that read from disk (PID files, config, log files) without needing a full controller. They create standalone `WorktreeManager`/`BudgetManager` for read-only status display.
+
+### Task A7: New Tests
+
+Wrote 12 tests covering the factory, protocols, and push no-op.
+
+**What was built:**
+
+- **`tests/test_hunter_backends.py`** (196 lines) — 12 tests across 6 classes:
+
+| Class | Tests | What it verifies |
+|-------|-------|-----------------|
+| `TestCreateControllerLocal` | 3 | Returns `HunterController` instance, calls both constructors, passes custom `budget` through (skips `BudgetManager()`) |
+| `TestCreateControllerAuto` | 2 | Auto defaults to local when no `FLY_APP_NAME`, selects fly when env var present |
+| `TestCreateControllerFly` | 1 | `mode="fly"` raises `NotImplementedError` with descriptive message |
+| `TestCreateControllerInvalidMode` | 2 | Unknown mode (`"remote-ssh"`) and empty string both raise `ValueError` |
+| `TestWorktreeManagerPush` | 2 | Method exists + callable on class, no-op doesn't raise (uses real temp git repo) |
+| `TestProtocolSatisfaction` | 2 | `WorktreeManager` has all 17 `WorktreeBackend` methods + 2 attrs; `HunterController` has all 5 `ControlBackend` methods + 3 properties |
+
+**Mock strategy:** Patches `WorktreeManager.__init__` and `BudgetManager.__init__` (returning `None`) to avoid real git/file operations while still testing that the factory produces real `HunterController` instances. The push no-op test creates a temporary git repo via `tmp_path` fixture. Protocol tests inspect the class objects directly without instantiation.
+
+### Task A8: Existing Test Updates
+
+All 337 existing tests pass. The 10 `TestSetup` tests in `test_hunter_overseer.py` required mock target updates.
+
+**What was modified in `tests/test_hunter_overseer.py`** (~60 lines changed across 10 tests):
+
+The tests all patched `hunter.overseer.WorktreeManager` and `hunter.overseer.HunterController` — module-level imports that no longer exist after Task A5 removed them. Updated to patch `hunter.backends.create_controller` instead.
+
+Before (6 patches per test):
+```python
+@patch("hunter.overseer.ensure_hunter_home")
+@patch("hunter.overseer.WorktreeManager")        # removed import
+@patch("hunter.overseer.BudgetManager")
+@patch("hunter.overseer.HunterController")        # removed import
+@patch("hunter.overseer.AnimaManager")
+@patch("run_agent.AIAgent")
+```
+
+After (5 patches per test):
+```python
+@patch("hunter.overseer.ensure_hunter_home")
+@patch("hunter.backends.create_controller")        # factory
+@patch("hunter.overseer.BudgetManager")
+@patch("hunter.overseer.AnimaManager")
+@patch("run_agent.AIAgent")
+```
+
+Tests that checked worktree behavior (`test_setup_ensures_worktree`, `test_setup_worktree_already_setup`) now set `mock_factory.return_value = mock_ctrl` where `mock_ctrl.worktree.is_setup.return_value` controls the behavior. Added a `_make_mock_controller(worktree_is_setup=True)` helper.
+
+`test_setup_uses_provided_controller` gained an additional assertion: `_factory.assert_not_called()` — verifying that when a controller is provided via `OverseerLoop(controller=...)`, the factory is never invoked.
+
+### Design decisions
+
+- **`typing.Protocol` (structural subtyping), not ABC:** `WorktreeManager` satisfies `WorktreeBackend` without inheriting from it — Go-style interface satisfaction. Phase B introduces `FlyWorktreeBackend` that also satisfies the protocol without touching `WorktreeManager`. No registration, no shared base class.
+- **Wide protocols over narrow:** Match real usage, not an idealized minimal interface. We can narrow in Phase B when we know what the remote backend actually needs.
+- **Factory over DI container:** A single function with a `mode` parameter is the simplest way to centralize construction. Phase B adds one `elif mode == "fly":` branch — every consumer gets Fly.io support for free.
+- **`_set_controller()` preserved:** The factory is the default construction path; `_set_controller()` overrides it for testing and for the Overseer's shared-controller injection. Both mechanisms coexist cleanly.
+- **`_cmd_setup()` not converted:** Setup is bootstrapping — it creates the infrastructure the factory depends on (worktree, budget config). Using the factory for setup would be circular.
+
+### Known seams for Phase B
+
+1. **`inject_tools.py` file-based IPC** bypasses the controller — writes directly to `get_injection_path()` and `get_interrupt_flag_path()`. Remote backends will need injection routed through the backend.
+2. **`HunterController.spawn()` creates `HunterProcess` internally** — Phase B will need to delegate to `ControlBackend.spawn()` instead, or create `FlyHunterController` as an alternative.
+3. **`process_tools.py` accesses `process._pid`** (private attr) — Phase B should expose PID through a public interface or the status dict.
+4. **`WorktreeBackend.push()` is the only new method** — for remote, `commit()` and `push()` are separate steps (edit locally, push to trigger remote redeploy). The Overseer's code tools will need to call `push()` after `commit()`.
+5. **Read-only CLI commands** (`_cmd_status`, `_cmd_budget`, `_cmd_logs`) bypass the factory — they create standalone managers for disk reads. Phase B may revisit if remote status queries differ.
+
+### Files changed summary
+
+| File | Action | Lines | Purpose |
+|------|--------|-------|---------|
+| `hunter/backends/base.py` | **Created** | 101 | Protocols: `WorktreeBackend`, `ControlBackend` |
+| `hunter/backends/__init__.py` | **Created** | 82 | Factory: `create_controller(mode, budget)` |
+| `hunter/worktree.py` | Modified | +6 | Added `push()` no-op |
+| `hunter/tools/process_tools.py` | Modified | net −4 | `_get_controller()` → factory |
+| `hunter/tools/inject_tools.py` | Modified | net −4 | `_get_controller()` → factory |
+| `hunter/tools/code_tools.py` | Modified | net −4 | `_get_controller()` → factory |
+| `hunter/tools/budget_tools.py` | Modified | net −4 | `_get_controller()` → factory |
+| `hunter/overseer.py` | Modified | net −3 | Removed 2 imports, factory in `_setup()`, worktree access via controller |
+| `hunter/cli.py` | Modified | net −4 | `_cmd_spawn()` → factory |
+| `tests/test_hunter_backends.py` | **Created** | 196 | 12 tests for factory + protocols |
+| `tests/test_hunter_overseer.py` | Modified | ~60 | 10 setup tests re-patched for factory |
+
+**Tests:** 349/349 passing (337 existing + 12 new). 2 pre-existing failures in unrelated files (`test_timezone.py`, `test_vision_tools.py`) confirmed not caused by Phase A.
 
 ---
 

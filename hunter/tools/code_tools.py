@@ -38,13 +38,8 @@ def _get_controller():
     """
     global _controller
     if _controller is None:
-        from hunter.budget import BudgetManager
-        from hunter.control import HunterController
-        from hunter.worktree import WorktreeManager
-
-        worktree = WorktreeManager()
-        budget = BudgetManager()
-        _controller = HunterController(worktree=worktree, budget=budget)
+        from hunter.backends import create_controller
+        _controller = create_controller()
     return _controller
 
 

@@ -29,9 +29,9 @@ _controller = None
 def _get_controller():
     """Lazily initialise and return the shared HunterController.
 
-    The controller is created once per process. It wires together the
-    WorktreeManager (git worktree for the Hunter's codebase) and the
-    BudgetManager (spend tracking + enforcement).
+    The controller is created once per process via the backend factory.
+    It wires together the WorktreeManager (git worktree for the Hunter's
+    codebase) and the BudgetManager (spend tracking + enforcement).
 
     Deferred imports avoid circular dependencies and allow hunter/ to be
     an optional package — if the imports fail, the tools simply won't be
@@ -39,13 +39,8 @@ def _get_controller():
     """
     global _controller
     if _controller is None:
-        from hunter.budget import BudgetManager
-        from hunter.control import HunterController
-        from hunter.worktree import WorktreeManager
-
-        worktree = WorktreeManager()
-        budget = BudgetManager()
-        _controller = HunterController(worktree=worktree, budget=budget)
+        from hunter.backends import create_controller
+        _controller = create_controller()
     return _controller
 
 
