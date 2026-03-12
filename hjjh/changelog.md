@@ -1,5 +1,7 @@
 # Hermes Hunter — Changelog
 
+- **1.8.0** — Overseer main loop: `OverseerLoop` — continuous monitoring, evaluation, and improvement of the Hunter agent
+- **1.7.0** — Overseer system prompt + reference docs: identity, intervention strategy, budget management, decision framework
 - **1.6.0** — Budget/model tools: `budget_status`, `hunter_model_set` — all 13 Overseer tools now complete
 - **1.5.0** — Code modification tools: `hunter_code_read`, `hunter_code_edit`, `hunter_diff`, `hunter_rollback`, `hunter_redeploy`
 - **1.4.0** — Overseer injection tools: `hunter_inject`, `hunter_interrupt`, `hunter_logs` registered in `hunter-overseer` toolset
@@ -7,6 +9,93 @@
 - **1.2.0** — Elephantasm memory integration: `AnimaManager`, `OverseerMemoryBridge`, `HunterMemoryBridge`
 - **1.1.0** — Phase 1 foundation: package scaffolding, budget system, worktree manager, process controller
 - **1.0.0** — Foundation fork of Hermes Agent + architecture design
+
+---
+
+## 1.8.0 — Overseer Main Loop (Task 10)
+
+**Date:** 2026-03-12
+
+The Overseer's brain — a continuous control loop that monitors, evaluates, and improves the Hunter agent using the 13 tools from Tasks 6–9.
+
+### Task 10: Overseer Main Loop
+
+Implemented `OverseerLoop` in `hunter/overseer.py` — a `while`-loop wrapper around `AIAgent` that gives the Overseer full autonomy over the Hunter's lifecycle.
+
+**What was built:**
+
+- **`hunter/overseer.py`** (~435 lines, replaced 12-line stub) — `OverseerLoop` class + `_load_overseer_system_prompt()`:
+  - `run()` — main loop, blocks until `KeyboardInterrupt` or `stop()`. Catches per-iteration errors without crashing — resilience is critical for an autonomous long-running process.
+  - `stop()` — signals loop exit after current iteration.
+  - `_setup()` — one-time init: creates shared `HunterController` and injects it into all 4 tool modules (`process_tools`, `inject_tools`, `code_tools`, `budget_tools`) via `_set_controller()`. Ensures Animas, budget config, worktree, and memory bridge are all initialised (all non-fatal on failure).
+  - `_create_agent()` — builds `AIAgent` with `enabled_toolsets=["hunter-overseer"]`, `max_iterations=20`, `quiet_mode=True`, `skip_context_files=True`, `skip_memory=True`. Session IDs are timestamped (`overseer-YYYYMMDD-HHMMSS`).
+  - `_iteration()` — single loop step: reload budget → hard stop check → inject Elephantasm memory → build iteration prompt → `run_conversation()` → append user/assistant pair to history → trim if over threshold → extract decision to Elephantasm → record Overseer's own API spend.
+  - `_build_iteration_prompt()` — builds the user message with budget summary, alert warnings, Hunter status (running/stopped/crashed), recent logs, iteration count, and a task description listing the agent's intervention options.
+  - `_shutdown()` — extracts final event to Elephantasm, closes memory bridge.
+
+**Constructor parameters:**
+- `model` — LLM the Overseer itself uses (default: `anthropic/claude-opus-4.6`)
+- `budget` / `memory` / `controller` — optional pre-configured dependencies (created in `_setup()` if None)
+- `check_interval` — seconds between iterations (default 30)
+- `history_max_messages` / `history_keep_messages` — conversation trim thresholds (40/20)
+
+**Critical design decision — shared controller injection:**
+
+Each tool module has its own lazy `_controller` singleton. Without intervention, `hunter_spawn` via the tool registry creates a Hunter tracked by `process_tools._controller`, but the loop's `_controller.get_status()` would report "no Hunter spawned" — a split-brain problem. **Solution:** `_setup()` creates one shared `HunterController` and injects it into all four tool modules via their `_set_controller()` functions.
+
+**Conversation history management:** Only user/assistant message pairs are tracked — not internal tool_call/tool messages from `result["messages"]`. This prevents rapid context inflation (a single agent turn with tool calls can produce 10–20 internal messages). History is trimmed to the last `history_keep_messages` (20) when it exceeds `history_max_messages` (40). Elephantasm memory provides long-term continuity beyond the trim window.
+
+**Spend tracking:** Overseer records its own API spend using rough token estimates (4000 input + 1000 output per API call). Actual token tracking would require `AIAgent` to expose usage data (future improvement).
+
+**Design decisions:**
+- Non-fatal everything: Elephantasm, Anima setup, memory bridge — all fail gracefully. The loop continues even if memory is down.
+- Prompt reloaded each iteration: ensures reference doc changes take effect without restart.
+- Budget checked first each iteration: hard stop kills the Hunter and skips the agent turn entirely — no wasted API spend.
+- Error resilience in `run()`: per-iteration exceptions are caught, logged, extracted to Elephantasm, and the loop continues.
+
+**Tests:** 53/53 passing — setup (10: ensure_hunter_home, budget config, worktree setup/already-setup, animas ensure/failure, agent creation, controller injection into 4 tool modules, memory bridge failure non-fatal, provided controller), iteration (16: budget reload/check, hard stop kills Hunter + skips agent + extracts memory, memory inject, ephemeral prompt update with/without memory, run_conversation called, history append, decision extract, spend recording, count increment, no-memory mode, zero-spend on zero API calls, zero-spend on zero cost), history management (4: grows across iterations, trimmed at threshold, keeps recent messages, passed to agent), prompt building (8: budget summary with $, alert warning, no alert when OK, Hunter not running/running, logs when running, task section with tool names, iteration number), run/shutdown (7: stop flag, shutdown extracts final event with count, shutdown closes memory, shutdown without memory OK, shutdown sets running false, iteration error does not crash loop, iteration error extracted to Elephantasm), agent creation (6: correct toolsets, quiet mode, skip context files, skip memory, session ID format, model passthrough), first run (2: "not running" in prompt, spawn suggestion).
+
+---
+
+## 1.7.0 — Overseer System Prompt (Task 11)
+
+**Date:** 2026-03-12
+
+The Overseer's personality and decision-making framework — a structured system prompt with modular reference documents that guide intervention strategy and budget management.
+
+### Task 11: System Prompt & Reference Documents
+
+Created the Overseer's system prompt and supporting reference docs as bundled Markdown files in `hunter/prompts/`.
+
+**What was built:**
+
+- **`hunter/prompts/overseer_system.md`** (~95 lines) — main system prompt:
+  - **Identity:** "You are the Overseer — a meta-agent responsible for continuously improving a bug-bounty Hunter agent."
+  - **Three intervention modes:** SOFT (`hunter_inject` — tactical steering), HARD (`hunter_code_edit` + `hunter_redeploy` — systemic improvements with 6-step workflow), MODEL (`hunter_model_set` — cost optimisation). Includes the principle: "Always prefer the least invasive intervention."
+  - **Decision framework:** 6 evaluation questions per iteration — is the Hunter running? Stuck? Finding vulns? Report quality? On budget? Did last intervention help?
+  - **Quality definition:** "High-quality vulnerability reports that earn bounty payouts" as the ultimate metric, with 7 criteria (title, CVSS, CWE, reproduction steps, PoC, impact, remediation).
+  - **Tool quick reference:** All 13 tools grouped by category (process management, runtime injection, code modification, budget & model).
+  - **8 rules:** Never modify own code, always commit before redeploying, one change per commit, monitor after hard interventions, rollback on regression, respect budget absolutely, observe rather than intervene when in doubt, prefer skills over code changes.
+
+- **`hunter/prompts/references/budget-management.md`** (~48 lines) — model tier selection + budget strategies:
+  - **Model tier table:** Maps Hunter phases (recon → analysis → PoC → reporting) to recommended model sizes (7B → 32B → 72B) with rationale.
+  - **Three budget strategy tiers:** Comfortable (<50% — heavy model, don't optimise), Cautious (50–80% — drop subagents to light, selective targeting), Critical (>80% — medium tier only, finish current targets, consider polishing over hunting).
+  - **Cost tracking guidance:** Check budget at start of each iteration, proactively switch before hard stop forces a kill.
+
+- **`hunter/prompts/references/intervention-strategy.md`** (~58 lines) — when and how to intervene:
+  - **Four decision categories:** Do nothing (steady progress, positive outcomes), Soft intervention (redirect focus, nudge quality), Hard intervention (repeated failures, systemic gaps), Model change (budget pressure, phase transitions).
+  - **Intervention sizing ladder:** Skill addition (safest) → system prompt tweak → tool parameter change → tool logic change → core agent change (riskiest). "Do this first" for skills.
+  - **Post-intervention monitoring protocol:** Watch 3–5 iterations, compare before/after, rollback immediately on regression, don't stack changes.
+  - **Common anti-patterns:** Over-intervention (prevents momentum), thrashing (alternating strategies), large rewrites (when targeted edits suffice), ignoring rollback (fixing forward on broken changes).
+
+- **`_load_overseer_system_prompt()`** in `hunter/overseer.py`:
+  - Reads main prompt from `hunter/prompts/overseer_system.md`
+  - Appends all `.md` files from `hunter/prompts/references/` sorted alphabetically with `---` dividers
+  - Raises `FileNotFoundError` if main prompt missing, tolerates missing `references/` dir
+
+**Design decision — bundled files, not skills:** Reference docs are loaded directly from the package directory rather than using the Hermes skills system. This avoids adding the `skills` toolset to the Overseer's `enabled_toolsets`, which would pull in 16+ extra tools and break the focused `hunter-overseer` tool surface. The trade-off is that reference docs don't benefit from the skills system's platform filtering or frontmatter features, but the Overseer doesn't need those.
+
+**Tests:** 18/18 passing — real prompt files (4: main prompt exists, references dir exists, budget reference exists, intervention reference exists), prompt content (8: contains role/identity, soft/hard/model intervention modes, rules section, decision framework questions, tool quick reference, references appended to main prompt, dividers between references), load function (2: returns non-empty string, includes reference content), edge cases (4: missing references dir OK, missing main prompt raises FileNotFoundError, references sorted alphabetically/deterministically, empty references dir OK).
 
 ---
 
