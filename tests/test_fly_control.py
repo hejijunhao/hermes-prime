@@ -1,12 +1,17 @@
 """Tests for hunter.backends.fly_control — FlyHunterController."""
 
+import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from hunter.backends.fly_api import FlyAPIError
-from hunter.backends.fly_control import FlyHunterController, FlyHunterProcess
+from hunter.backends.fly_control import (
+    FlyHunterController,
+    FlyHunterProcess,
+    _MAX_HISTORY,
+)
 from hunter.backends.fly_config import FlyConfig
 
 
@@ -380,4 +385,76 @@ class TestProperties:
         assert controller.history == []
 
     def test_history_returns_copy(self, controller):
-        assert controller.history is not controller._history
+        h = controller.history
+        assert isinstance(h, list)
+        assert h is not controller._history
+
+    def test_history_capped_at_max(self, controller, mock_fly_client):
+        """History deque evicts oldest entries when exceeding _MAX_HISTORY."""
+        for i in range(_MAX_HISTORY + 10):
+            mock_fly_client.create_machine.return_value = {
+                "id": f"m-{i}", "state": "created",
+            }
+            mock_fly_client.wait_for_state.return_value = {
+                "id": f"m-{i}", "state": "started",
+            }
+            controller.spawn(session_id=f"s-{i}")
+
+        # The final spawn doesn't kill (it IS the current), so history
+        # has _MAX_HISTORY + 10 spawn-kill cycles minus the last one.
+        assert len(controller.history) <= _MAX_HISTORY
+
+
+class TestIsRunningCache:
+
+    def test_cache_avoids_repeated_api_calls(self, controller, mock_fly_client):
+        controller.spawn()
+        mock_fly_client.get_machine.return_value = {"state": "started"}
+
+        # First call queries the API
+        assert controller.is_running is True
+        # Second call within TTL should NOT query again
+        initial_count = mock_fly_client.get_machine.call_count
+        assert controller.is_running is True
+        assert mock_fly_client.get_machine.call_count == initial_count
+
+    def test_cache_expires_after_ttl(self, controller, mock_fly_client):
+        controller.spawn()
+        mock_fly_client.get_machine.return_value = {"state": "started"}
+
+        assert controller.is_running is True
+        count_after_first = mock_fly_client.get_machine.call_count
+
+        # Expire the cache by backdating the timestamp
+        controller._is_running_cache_ts = time.monotonic() - 60
+
+        assert controller.is_running is True
+        assert mock_fly_client.get_machine.call_count > count_after_first
+
+    def test_spawn_invalidates_cache(self, controller, mock_fly_client):
+        controller.spawn()
+        mock_fly_client.get_machine.return_value = {"state": "started"}
+
+        # Populate cache
+        assert controller.is_running is True
+
+        # Spawn a new machine (kills old, creates new)
+        mock_fly_client.create_machine.return_value = {"id": "m-new"}
+        mock_fly_client.wait_for_state.return_value = {"id": "m-new", "state": "started"}
+        controller.spawn()
+
+        # Cache should be invalidated — next is_running queries API
+        count_before = mock_fly_client.get_machine.call_count
+        _ = controller.is_running
+        assert mock_fly_client.get_machine.call_count > count_before
+
+    def test_kill_invalidates_cache(self, controller, mock_fly_client):
+        controller.spawn()
+        mock_fly_client.get_machine.return_value = {"state": "started"}
+
+        assert controller.is_running is True
+
+        controller.kill()
+        # After kill, _current is None so is_running returns False
+        # without touching the API
+        assert controller.is_running is False

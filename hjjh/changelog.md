@@ -1,5 +1,6 @@
 # Hermes Prime — Changelog
 
+- **4.1.0** — Pre-Phase-D hardening: retry logic in Fly API client, bounded history, TTL cache for `is_running`, clone verification in Hunter entrypoint
 - **4.0.0** — Deployment infrastructure: Dockerfiles, entrypoint scripts, fly.toml configs, deploy script — ready to run the two-machine system on Fly.io
 - **3.0.0** — Fly.io remote backend: `FlyMachinesClient`, `FlyConfig`, `FlyWorktreeManager`, `FlyHunterController` — full remote Hunter lifecycle via Fly Machines API
 - **2.1.0** — Rename to Hermes Prime + vision consolidation: A/B experiment naming (Prime vs Alpha), consolidated `hermes-prime.md`, Alpha blueprint
@@ -14,6 +15,40 @@
 - **1.2.0** — Elephantasm memory integration: `AnimaManager`, `OverseerMemoryBridge`, `HunterMemoryBridge`
 - **1.1.0** — Phase 1 foundation: package scaffolding, budget system, worktree manager, process controller
 - **1.0.0** — Foundation fork of Hermes Agent + architecture design
+
+---
+
+## 4.1.0 — Pre-Phase-D Hardening
+
+**Date:** 2026-03-13
+
+Four production reliability fixes identified during post-Phase-C review, applied before moving to Phase D (Bootstrap Mode).
+
+### Fix 1: Retry Logic in FlyMachinesClient
+
+`_request()` now retries up to 3× on transient errors (502, 503, 504, 429, timeouts) with exponential backoff (1s, 2s, 4s). Non-retryable 4xx errors fail immediately. New `_backoff()` static method + `_RETRYABLE_STATUS_CODES` constant.
+
+**Modified:** `hunter/backends/fly_api.py`, `tests/test_fly_api.py` (+5 tests in `TestRetryLogic`)
+
+### Fix 2: Bounded History in FlyHunterController
+
+`_history` changed from unbounded `List` to `collections.deque(maxlen=100)`. Oldest entries auto-evict. `history` property still returns a list copy (unchanged API).
+
+**Modified:** `hunter/backends/fly_control.py`, `tests/test_fly_control.py` (+1 test)
+
+### Fix 3: TTL Cache for `is_running`
+
+30-second TTL cache on `is_running` to avoid hammering the Fly API. Uses `time.monotonic()`. Cache invalidated on `spawn()` and `kill()` via `_invalidate_running_cache()`.
+
+**Modified:** `hunter/backends/fly_control.py`, `tests/test_fly_control.py` (+4 tests in `TestIsRunningCache`)
+
+### Fix 4: Clone Verification in Hunter Entrypoint
+
+Added `[ ! -d "$CLONE_DIR/.git" ]` guard after `git clone` — fails fast with a clear error instead of proceeding to a confusing pip install failure.
+
+**Modified:** `deploy/hunter-entrypoint.sh`
+
+**Tests:** 438 passed (428 → 438, +10 new). Zero regressions.
 
 ---
 

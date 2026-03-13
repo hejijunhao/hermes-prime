@@ -10,11 +10,15 @@ create, start, stop, destroy, wait, get, list, and logs.
 """
 
 import logging
+import time
 from typing import Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Status codes worth retrying (transient server errors).
+_RETRYABLE_STATUS_CODES = {502, 503, 504, 429}
 
 
 class FlyAPIError(Exception):
@@ -178,8 +182,12 @@ class FlyMachinesClient:
         json: dict = None,
         params: dict = None,
         request_timeout: float = None,
+        retries: int = 3,
     ) -> dict | list:
         """Execute an HTTP request against the Fly Machines API.
+
+        Retries up to *retries* times on transient errors (5xx, 429, timeouts)
+        with exponential backoff (1s, 2s, 4s).
 
         Args:
             method: HTTP method (GET, POST, DELETE).
@@ -187,12 +195,13 @@ class FlyMachinesClient:
             json: Request body (for POST).
             params: Query parameters.
             request_timeout: Override default timeout for this request.
+            retries: Max retry attempts for transient errors. 0 to disable.
 
         Returns:
             Parsed JSON response.
 
         Raises:
-            FlyAPIError: On non-2xx responses.
+            FlyAPIError: On non-2xx responses after exhausting retries.
         """
         logger.debug("Fly API: %s %s", method, path)
 
@@ -204,26 +213,56 @@ class FlyMachinesClient:
         if request_timeout is not None:
             kwargs["timeout"] = request_timeout
 
-        try:
-            response = self._client.request(method, path, **kwargs)
-        except httpx.TimeoutException as exc:
-            raise FlyAPIError(0, f"Request timed out: {exc}")
-        except httpx.HTTPError as exc:
-            raise FlyAPIError(0, f"HTTP error: {exc}")
+        last_error: Optional[FlyAPIError] = None
+        for attempt in range(1 + retries):
+            try:
+                response = self._client.request(method, path, **kwargs)
+            except httpx.TimeoutException as exc:
+                last_error = FlyAPIError(0, f"Request timed out: {exc}")
+                if attempt < retries:
+                    self._backoff(attempt, last_error)
+                    continue
+                raise last_error
+            except httpx.HTTPError as exc:
+                last_error = FlyAPIError(0, f"HTTP error: {exc}")
+                if attempt < retries:
+                    self._backoff(attempt, last_error)
+                    continue
+                raise last_error
 
-        if response.status_code < 200 or response.status_code >= 300:
-            body = response.text[:500]
-            raise FlyAPIError(
-                status_code=response.status_code,
-                message=f"{method} {path} failed",
-                response_body=body,
-            )
+            if response.status_code < 200 or response.status_code >= 300:
+                body = response.text[:500]
+                last_error = FlyAPIError(
+                    status_code=response.status_code,
+                    message=f"{method} {path} failed",
+                    response_body=body,
+                )
+                if (
+                    response.status_code in _RETRYABLE_STATUS_CODES
+                    and attempt < retries
+                ):
+                    self._backoff(attempt, last_error)
+                    continue
+                raise last_error
 
-        # Some endpoints return 200 with no body (e.g. start, stop).
-        if not response.content:
-            return {}
+            # Some endpoints return 200 with no body (e.g. start, stop).
+            if not response.content:
+                return {}
 
-        return response.json()
+            return response.json()
+
+        # Should be unreachable, but satisfy the type checker.
+        raise last_error  # type: ignore[misc]
+
+    @staticmethod
+    def _backoff(attempt: int, error: FlyAPIError) -> None:
+        """Sleep with exponential backoff: 1s, 2s, 4s, ..."""
+        delay = 2**attempt
+        logger.warning(
+            "Fly API transient error (attempt %d), retrying in %ds: %s",
+            attempt + 1, delay, error,
+        )
+        time.sleep(delay)
 
     def __repr__(self) -> str:
         return f"FlyMachinesClient(app={self.app_name!r})"

@@ -22,6 +22,12 @@ fi
 
 echo "[hunter-entrypoint] Cloning ${HUNTER_REPO}..."
 git clone --depth 1 "$REPO_URL" "$CLONE_DIR"
+
+if [ ! -d "$CLONE_DIR/.git" ]; then
+    echo "[hunter-entrypoint] ERROR: Clone failed — $CLONE_DIR/.git not found" >&2
+    exit 1
+fi
+
 cd "$CLONE_DIR"
 
 # --- Install ---

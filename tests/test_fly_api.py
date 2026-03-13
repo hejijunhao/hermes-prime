@@ -1,7 +1,7 @@
 """Tests for hunter.backends.fly_api — Fly Machines API client."""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from hunter.backends.fly_api import FlyAPIError, FlyMachinesClient
 
@@ -205,3 +205,88 @@ class TestGetLogs:
 
         logs = client.get_logs("m123")
         assert logs == []
+
+
+class TestRetryLogic:
+
+    @patch("hunter.backends.fly_api.time.sleep")
+    def test_retries_on_5xx(self, mock_sleep, client, mock_httpx_client):
+        fail = MagicMock()
+        fail.status_code = 503
+        fail.text = "Service Unavailable"
+
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.content = b'[{"id": "m1"}]'
+        ok.json.return_value = [{"id": "m1"}]
+
+        mock_httpx_client.request.side_effect = [fail, ok]
+        result = client.list_machines()
+
+        assert result == [{"id": "m1"}]
+        assert mock_httpx_client.request.call_count == 2
+        mock_sleep.assert_called_once_with(1)  # 2^0 = 1s
+
+    @patch("hunter.backends.fly_api.time.sleep")
+    def test_retries_on_timeout(self, mock_sleep, client, mock_httpx_client):
+        import httpx
+        mock_httpx_client.request.side_effect = [
+            httpx.TimeoutException("timed out"),
+            httpx.TimeoutException("timed out again"),
+            httpx.TimeoutException("timed out a third time"),
+            httpx.TimeoutException("timed out final"),
+        ]
+
+        with pytest.raises(FlyAPIError) as exc_info:
+            client.get_machine("m123")
+        assert exc_info.value.status_code == 0
+        # 1 original + 3 retries = 4 total attempts
+        assert mock_httpx_client.request.call_count == 4
+        assert mock_sleep.call_count == 3
+
+    @patch("hunter.backends.fly_api.time.sleep")
+    def test_no_retry_on_4xx(self, mock_sleep, client, mock_httpx_client):
+        fail = MagicMock()
+        fail.status_code = 404
+        fail.text = "Not Found"
+        mock_httpx_client.request.return_value = fail
+
+        with pytest.raises(FlyAPIError) as exc_info:
+            client.get_machine("m123")
+        assert exc_info.value.status_code == 404
+        assert mock_httpx_client.request.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("hunter.backends.fly_api.time.sleep")
+    def test_retries_on_429(self, mock_sleep, client, mock_httpx_client):
+        rate_limited = MagicMock()
+        rate_limited.status_code = 429
+        rate_limited.text = "Too Many Requests"
+
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.content = b'{"id": "m1"}'
+        ok.json.return_value = {"id": "m1"}
+
+        mock_httpx_client.request.side_effect = [rate_limited, ok]
+        result = client.get_machine("m1")
+        assert result == {"id": "m1"}
+        assert mock_httpx_client.request.call_count == 2
+
+    @patch("hunter.backends.fly_api.time.sleep")
+    def test_exponential_backoff_delays(self, mock_sleep, client, mock_httpx_client):
+        import httpx
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.content = b'{}'
+        ok.json.return_value = {}
+
+        mock_httpx_client.request.side_effect = [
+            httpx.TimeoutException("1"),
+            httpx.TimeoutException("2"),
+            ok,
+        ]
+        client.get_machine("m1")
+
+        # Backoff: 2^0=1, 2^1=2
+        assert mock_sleep.call_args_list == [call(1), call(2)]

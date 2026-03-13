@@ -14,10 +14,15 @@ Key differences from local:
 """
 
 import logging
+import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+# Maximum number of historical machine runs to retain in memory.
+_MAX_HISTORY = 100
 
 from hunter.backends.fly_api import FlyAPIError, FlyMachinesClient
 from hunter.backends.fly_config import FlyConfig
@@ -71,7 +76,10 @@ class FlyHunterController:
         self._fly = fly_client
         self._config = fly_config
         self._current: Optional[FlyHunterProcess] = None
-        self._history: List[Dict[str, Any]] = []
+        self._history: deque[Dict[str, Any]] = deque(maxlen=_MAX_HISTORY)
+        # TTL cache for is_running to avoid hammering the Fly API.
+        self._is_running_cache: Optional[bool] = None
+        self._is_running_cache_ts: float = 0.0
 
     # -- ControlBackend protocol (properties) --------------------------------
 
@@ -83,16 +91,32 @@ class FlyHunterController:
     def budget(self) -> "BudgetManager":
         return self._budget
 
+    # Seconds to cache is_running result before querying the API again.
+    _IS_RUNNING_TTL = 30.0
+
     @property
     def is_running(self) -> bool:
-        """Check if the Hunter machine is in 'started' state."""
+        """Check if the Hunter machine is in 'started' state.
+
+        Result is cached for ``_IS_RUNNING_TTL`` seconds to avoid
+        hammering the Fly API on every Overseer loop iteration.
+        """
         if self._current is None:
             return False
+        now = time.monotonic()
+        if (
+            self._is_running_cache is not None
+            and (now - self._is_running_cache_ts) < self._IS_RUNNING_TTL
+        ):
+            return self._is_running_cache
         try:
             machine = self._fly.get_machine(self._current.machine_id)
-            return machine.get("state") == "started"
+            result = machine.get("state") == "started"
         except FlyAPIError:
-            return False
+            result = False
+        self._is_running_cache = result
+        self._is_running_cache_ts = now
+        return result
 
     @property
     def current(self) -> Optional[FlyHunterProcess]:
@@ -197,6 +221,7 @@ class FlyHunterController:
             fly_app=self._config.hunter_app_name,
         )
         self._current = proc
+        self._invalidate_running_cache()
 
         logger.info(
             "Hunter spawned on Fly: machine_id=%s session=%s",
@@ -232,6 +257,7 @@ class FlyHunterController:
 
         self._record_history(self._current)
         self._current = None
+        self._invalidate_running_cache()
 
         logger.info("Hunter machine killed: %s", machine_id)
         return True
@@ -420,6 +446,11 @@ class FlyHunterController:
         return proc
 
     # -- Internal ------------------------------------------------------------
+
+    def _invalidate_running_cache(self) -> None:
+        """Force the next ``is_running`` call to query the API."""
+        self._is_running_cache = None
+        self._is_running_cache_ts = 0.0
 
     def _record_history(self, proc: FlyHunterProcess) -> None:
         """Save a summary of a process run to history."""
