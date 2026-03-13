@@ -1,0 +1,14 @@
+app = "hermes-prime-hunter"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "deploy/Dockerfile.hunter"
+
+# No [http_service] — Hunter has no public endpoints.
+# No [mounts] — Hunter is ephemeral.
+# Actual machine creation happens via Machines API (FlyHunterController),
+# not `fly deploy`. This config is used only to build and push the image.
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2048mb"

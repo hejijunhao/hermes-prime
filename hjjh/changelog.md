@@ -1,5 +1,7 @@
 # Hermes Prime — Changelog
 
+- **4.0.0** — Deployment infrastructure: Dockerfiles, entrypoint scripts, fly.toml configs, deploy script — ready to run the two-machine system on Fly.io
+- **3.0.0** — Fly.io remote backend: `FlyMachinesClient`, `FlyConfig`, `FlyWorktreeManager`, `FlyHunterController` — full remote Hunter lifecycle via Fly Machines API
 - **2.1.0** — Rename to Hermes Prime + vision consolidation: A/B experiment naming (Prime vs Alpha), consolidated `hermes-prime.md`, Alpha blueprint
 - **2.0.0** — Backend abstraction: `ControlBackend`/`WorktreeBackend` protocols, controller factory, 6 construction sites consolidated
 - **1.9.0** — CLI integration: `hermes hunter` subcommand tree — setup, overseer, spawn, kill, status, budget, logs
@@ -12,6 +14,225 @@
 - **1.2.0** — Elephantasm memory integration: `AnimaManager`, `OverseerMemoryBridge`, `HunterMemoryBridge`
 - **1.1.0** — Phase 1 foundation: package scaffolding, budget system, worktree manager, process controller
 - **1.0.0** — Foundation fork of Hermes Agent + architecture design
+
+---
+
+## 4.0.0 — Deployment Infrastructure (Phase C)
+
+**Date:** 2026-03-13
+
+All deployment artifacts for running the two-machine Hermes Prime system on Fly.io. Two bugs fixed (packaging, missing env var). Overseer (Machine A) runs ttyd browser terminal + OverseerLoop on an always-on Fly machine with persistent volume. Hunter (Machine B) is ephemeral — clones the latest code at boot, runs the agent, self-destructs on exit.
+
+### C0: Packaging Fix
+
+`hunter.backends` and `hunter.prompts` were missing from `pyproject.toml` `[tool.setuptools.packages.find].include`. `pip install` would skip all Fly backend code.
+
+**Modified:** `pyproject.toml` — added `"hunter.backends"`, `"hunter.prompts"` to the `include` list.
+
+### C1: GITHUB_PAT in Machine Config
+
+`FlyConfig.to_machine_config()` set `HUNTER_REPO` but not `GITHUB_PAT` in the Hunter machine's env vars. The Hunter entrypoint needs it to clone the private repo at boot.
+
+**Modified:** `hunter/backends/fly_config.py` — added `"GITHUB_PAT": self.github_pat` to the env dict.
+
+**Modified:** `tests/test_fly_config.py` — added assertions for `GITHUB_PAT` and `HUNTER_REPO` in `test_env_vars_set`.
+
+### C2: Overseer Entrypoint
+
+Single shell script running ttyd (foreground, PID 1 via `exec`) and OverseerLoop (background) with graceful shutdown.
+
+**Created:** `deploy/overseer-entrypoint.sh` (37 lines):
+- Creates state directories on persistent volume (`/data/hermes/hunter/{logs,injections}`, `/data/hunter-repo`)
+- Sets git config for commit operations
+- Starts `hermes hunter overseer --interval $OVERSEER_INTERVAL` in background (default 300s)
+- Traps SIGTERM/SIGINT → kills background process → waits → exits clean
+- Optional `--credential hermes:$AUTH_PASSWORD` when `AUTH_PASSWORD` is set
+- `exec ttyd` so Fly signals propagate correctly
+
+### C3: Hunter Entrypoint
+
+Boot sequence that clones repo, installs deps, runs the Hunter agent.
+
+**Created:** `deploy/hunter-entrypoint.sh` (47 lines):
+- Validates required env vars (`SESSION_ID`, `HUNTER_REPO`, `OPENROUTER_API_KEY`)
+- `git clone --depth 1` with authenticated URL when `GITHUB_PAT` is set
+- `pip install -e ".[hunter]"` in the clone
+- Translates env vars to CLI flags (`HUNTER_MODEL` → `--model`, `SESSION_ID` → `--session-id`, etc.)
+- `exec python -m hunter.runner` for signal propagation
+- Machine self-destructs on exit (`auto_destroy: True` in machine config)
+
+**Design decision:** Source is NOT baked into the image. Every Hunter machine gets the latest Overseer-written code without rebuilding the Docker image.
+
+### C4: Overseer Dockerfile
+
+**Created:** `deploy/Dockerfile.overseer` (35 lines) — `python:3.11-slim` + git/curl + ttyd 1.7.7 (architecture-aware) + full hermes-prime source + `pip install -e ".[hunter]"`. `ENV HERMES_HOME=/data/hermes` routes all state to the persistent volume. Layers ordered for cache efficiency (pyproject.toml copied first for deps-only cache layer).
+
+### C5: Hunter Dockerfile
+
+**Created:** `deploy/Dockerfile.hunter` (25 lines) — `python:3.11-slim` + git/curl + Node.js 20.x + semgrep. Entrypoint script only — no source code (cloned at boot).
+
+### C6: Overseer fly.toml
+
+**Created:** `deploy/fly.overseer.toml` (20 lines) — HTTP service on :8080 with force HTTPS, `auto_stop_machines = "off"` + `min_machines_running = 1` (always-on), `overseer_data` volume mounted at `/data`, `shared-cpu-2x` / 1024MB.
+
+### C7: Hunter fly.toml
+
+**Created:** `deploy/fly.hunter.toml` (14 lines) — No HTTP service (no public endpoints), no mounts (ephemeral), `shared-cpu-2x` / 2048MB. Used only to build and push the Docker image to Fly's registry.
+
+### C8: Deploy Script
+
+**Created:** `scripts/deploy-overseer.sh` (90 lines) — one-command Fly.io deployment:
+1. Check prerequisites (`fly` CLI installed and authenticated)
+2. Create Fly apps (`hermes-prime-overseer`, `hermes-prime-hunter`) if needed
+3. Create persistent volume `overseer_data` (10GB, sjc)
+4. Build and push Hunter image via `fly deploy --build-only --push`
+5. Set `HUNTER_FLY_IMAGE` secret on Overseer
+6. Deploy Overseer via `fly deploy`
+7. Print URL + secrets reminder
+
+### Files changed summary
+
+| Task | File | Action | Lines | Purpose |
+|------|------|--------|-------|---------|
+| C0 | `pyproject.toml` | Modified | 1 | Added `hunter.backends`, `hunter.prompts` to packages |
+| C1 | `hunter/backends/fly_config.py` | Modified | +1 | Added `GITHUB_PAT` to machine env |
+| C1 | `tests/test_fly_config.py` | Modified | +2 | Assert `GITHUB_PAT` and `HUNTER_REPO` in env |
+| C2 | `deploy/overseer-entrypoint.sh` | **Created** | 37 | ttyd + OverseerLoop + signal handling |
+| C3 | `deploy/hunter-entrypoint.sh` | **Created** | 47 | Clone + install + run |
+| C4 | `deploy/Dockerfile.overseer` | **Created** | 35 | Overseer container image |
+| C5 | `deploy/Dockerfile.hunter` | **Created** | 25 | Hunter container image |
+| C6 | `deploy/fly.overseer.toml` | **Created** | 20 | Fly config for always-on Overseer |
+| C7 | `deploy/fly.hunter.toml` | **Created** | 14 | Fly config for Hunter image builds |
+| C8 | `scripts/deploy-overseer.sh` | **Created** | 90 | One-command deployment |
+
+**Tests:** 415 passed (zero regressions). 13 pre-existing failures in `test_hunter_memory.py` (elephantasm `EventType` import issue, confirmed on pre-Phase-C `main`).
+
+---
+
+## 3.0.0 — Fly.io Remote Backend (Phase B)
+
+**Date:** 2026-03-13
+
+The Overseer can now manage a remote Hunter machine via the Fly Machines API. `create_controller(mode="fly")` returns a working `FlyHunterController` — all existing tool handlers continue unchanged via the backend protocols from Phase A. Injection routed through controller methods instead of file-based IPC.
+
+### Task B1: Fly Machines API Client
+
+Thin, typed wrapper around the Fly.io Machines REST API.
+
+**What was built:**
+
+- **`hunter/backends/fly_api.py`** (230 lines) — `FlyMachinesClient` with sync `httpx.Client`:
+  - Lifecycle: `create_machine()`, `start_machine()`, `stop_machine()`, `destroy_machine()`, `wait_for_state()`
+  - Status: `get_machine()`, `list_machines()`
+  - Logs: `get_logs()` (graceful empty-list fallback on API error)
+  - `FlyAPIError(Exception)` — structured error with `status_code`, `message`, `response_body`
+  - Centralised `_request()` wraps `httpx.TimeoutException` and `httpx.HTTPError` as `FlyAPIError(status_code=0)`
+
+**Tests:** 14/14 passing — init headers/URL/auth, each endpoint verb+URL+params, error handling (4xx, 5xx, timeout), log fallback.
+
+### Task B2: Fly Configuration
+
+All Fly-specific configuration loaded from environment variables.
+
+**What was built:**
+
+- **`hunter/backends/fly_config.py`** (128 lines) — `FlyConfig` dataclass:
+  - 6 required fields: `fly_api_token`, `hunter_app_name`, `github_pat`, `hunter_repo`, `machine_image`, `elephantasm_api_key`, `openrouter_api_key`
+  - 4 optional fields: `machine_cpu_kind` (`"shared"`), `machine_cpus` (2), `machine_memory_mb` (2048), `machine_region` (`""` auto)
+  - `from_env()` — raises `ValueError` listing *all* missing vars, not just the first
+  - `to_machine_config()` — builds Fly Machines API config dict with `auto_destroy: True`, `restart.policy: "no"` (ephemeral machines), API keys + model + session ID as env vars
+
+**Tests:** 11/11 passing — from_env (all vars, missing, defaults, overrides), to_machine_config (structure, env vars, instruction, resume, region).
+
+### Task B3: FlyWorktreeManager
+
+`WorktreeBackend` implementation using a local git clone with real `push()`.
+
+**What was built:**
+
+- **`hunter/backends/fly_worktree.py`** (127 lines) — `FlyWorktreeManager(WorktreeManager)`:
+  - Subclass strategy: inherits all file/git ops from `WorktreeManager`, overrides init + setup/teardown/is_setup/push
+  - `setup()` — clones from GitHub if missing, `git pull --ff-only` if exists
+  - `push()` — `git push origin main` (the key difference from local no-op)
+  - `is_setup()` — distinguishes clones (`.git` is directory) from worktrees (`.git` is file)
+  - Authenticated URL: `https://{PAT}@github.com/{repo}.git`, PAT redacted in logs
+
+**Tests:** 13/13 passing — init/URL/redaction, setup (clone/pull), teardown, is_setup variants, push command + guard, inherited method delegation.
+
+### Task B4: FlyHunterController
+
+`ControlBackend` implementation using Fly Machines API for Hunter lifecycle.
+
+**What was built:**
+
+- **`hunter/backends/fly_control.py`** (318 lines):
+  - `FlyHunterProcess` — dataclass with `machine_id`, `session_id`, `model`, `started_at`, `fly_app`. `pid` property returns `machine_id`.
+  - `FlyHunterController`:
+    - `spawn()` — budget check → kill existing → setup worktree → `create_machine()` → `wait_for_state("started")`. Cleans up failed machines on timeout.
+    - `kill()` — `stop → wait → destroy` sequence, tolerates API errors at each step (logs warnings instead of raising). Records history.
+    - `redeploy()` — `push()` → `kill()` → `spawn()` (push before respawn is key difference from local)
+    - `inject()` — sends via Elephantasm event, graceful fallback
+    - `interrupt()` — `stop_machine()` (hard interrupt, no flag file needed)
+    - `recover()` — `list_machines()` → find running → reconstruct `FlyHunterProcess` from machine metadata
+    - `is_running` queries Fly API each time (no cached state)
+
+**Tests:** 40/40 passing — FlyHunterProcess (pid, uptime), spawn (9: creates+waits, budget check/exhausted, kills existing, worktree setup, create failure, timeout+cleanup, session ID), kill (4: sequence, no machine, history, tolerates failure), redeploy (2: push→kill→spawn, session preservation), status (4), logs (2), inject (2), interrupt (2), recovery (4), properties (5).
+
+### Task B5: Protocol Extension — Injection Adapter
+
+Added `inject()` and `interrupt()` to `ControlBackend` protocol.
+
+**What was modified:**
+
+- **`hunter/backends/base.py`** (+4 lines) — two new protocol methods:
+  ```python
+  def inject(self, instruction: str, priority: str = "normal") -> None: ...
+  def interrupt(self) -> None: ...
+  ```
+
+### Task B7: Local Parity + Inject Tools Refactor
+
+Implemented `inject()` and `interrupt()` on local `HunterController`, then refactored inject tools to delegate through the controller.
+
+**What was modified:**
+
+- **`hunter/control.py`** (+30 lines) — `inject()` maps priority to prefix and writes to injection path; `interrupt()` writes interrupt flag file. Same file-based IPC, now behind a method.
+- **`hunter/tools/inject_tools.py`** (-48/+37 lines) — handlers are now thin dispatchers calling `controller.inject()` / `controller.interrupt()`. Priority validation stays at the boundary. File-write logic moved into the controller where it can be backend-specific.
+- **`tests/test_hunter_inject_tools.py`** (-85/+94 lines) — rewrote to mock `controller.inject()` / `controller.interrupt()` instead of checking file writes.
+
+### Task B6: Wire Up the Factory
+
+`create_controller(mode="fly")` returns a working `FlyHunterController`.
+
+**What was modified:**
+
+- **`hunter/backends/__init__.py`** (rewritten) — `mode="fly"` branch: `FlyConfig.from_env()` → `FlyMachinesClient` → `FlyWorktreeManager` → `FlyHunterController`. Return type broadened to `ControlBackend`. Clone path: `/data/hunter-repo` (Fly persistent volume mount).
+- **`tests/test_hunter_backends.py`** (~+40/-10 lines) — fly mode returns `FlyHunterController`, budget passthrough, auto-detection, protocol satisfaction updated for `inject`/`interrupt`.
+
+### Task B8: Integration Test
+
+**Status:** Deferred until Fly.io infrastructure is provisioned. Will be `tests/integration/test_fly_integration.py` with `@pytest.mark.integration`.
+
+### Files changed summary
+
+| File | Action | Lines | Purpose |
+|------|--------|-------|---------|
+| `hunter/backends/fly_api.py` | **Created** | 230 | Fly Machines REST API client |
+| `hunter/backends/fly_config.py` | **Created** | 128 | Environment-based configuration |
+| `hunter/backends/fly_worktree.py` | **Created** | 127 | WorktreeBackend via local clone + push |
+| `hunter/backends/fly_control.py` | **Created** | 318 | ControlBackend via Fly Machines API |
+| `hunter/backends/base.py` | Modified | +4 | Added `inject()`, `interrupt()` to ControlBackend |
+| `hunter/backends/__init__.py` | Modified | rewritten | Wired up Fly backend in factory |
+| `hunter/control.py` | Modified | +30 | Added `inject()`, `interrupt()` methods |
+| `hunter/tools/inject_tools.py` | Modified | -48/+37 | Delegated to `controller.inject()` |
+| `tests/test_fly_api.py` | **Created** | 208 | 14 tests |
+| `tests/test_fly_config.py` | **Created** | 125 | 11 tests |
+| `tests/test_fly_worktree.py` | **Created** | 166 | 13 tests |
+| `tests/test_fly_control.py` | **Created** | 310 | 40 tests |
+| `tests/test_hunter_backends.py` | Modified | ~+40/-10 | Updated factory + protocol tests |
+| `tests/test_hunter_inject_tools.py` | Modified | -85/+94 | Updated for controller-based injection |
+
+**Totals:** ~803 lines production code, ~809 lines tests. 84 new tests, 2984 total passing.
 
 ---
 

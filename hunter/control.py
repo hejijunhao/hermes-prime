@@ -43,6 +43,7 @@ from hunter.config import (
     HUNTER_MAX_ITERATIONS,
     ensure_hunter_home,
     get_hunter_log_dir,
+    get_injection_path,
     get_interrupt_flag_path,
 )
 
@@ -619,6 +620,35 @@ class HunterController:
         if self._current is None:
             return ""
         return self._current.get_logs(tail=tail)
+
+    def inject(self, instruction: str, priority: str = "normal") -> None:
+        """Send a runtime instruction to the Hunter via file-based IPC.
+
+        Writes the instruction (with optional priority prefix) to the
+        injection file that the Hunter's step_callback reads on its
+        next iteration.
+
+        Args:
+            instruction: The instruction to inject.
+            priority: One of ``"normal"``, ``"high"``, ``"critical"``.
+        """
+        _PRIORITY_PREFIXES = {
+            "normal": "",
+            "high": "HIGH PRIORITY: ",
+            "critical": "CRITICAL — DROP CURRENT TASK: ",
+        }
+        prefix = _PRIORITY_PREFIXES.get(priority, "")
+        content = f"{prefix}{instruction}"
+
+        injection_path = get_injection_path()
+        injection_path.parent.mkdir(parents=True, exist_ok=True)
+        injection_path.write_text(content, encoding="utf-8")
+
+    def interrupt(self) -> None:
+        """Signal the Hunter to stop gracefully via the interrupt flag file."""
+        flag = get_interrupt_flag_path()
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("interrupt", encoding="utf-8")
 
     @property
     def is_running(self) -> bool:

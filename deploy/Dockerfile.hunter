@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+# System deps
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Node.js 20.x (for JS-based security tools/targets)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Semgrep
+RUN pip install --no-cache-dir semgrep
+
+# Git config
+RUN git config --global user.name "Hermes Hunter" && \
+    git config --global user.email "hunter@hermes-prime"
+
+# Entrypoint only (source cloned at boot)
+COPY deploy/hunter-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+WORKDIR /workspace
+CMD ["/usr/local/bin/entrypoint.sh"]

@@ -87,20 +87,57 @@ class TestCreateControllerAuto:
         controller = create_controller(mode="auto")
         assert isinstance(controller, HunterController)
 
-    def test_auto_selects_fly_when_env_set(self, monkeypatch):
+    @patch("hunter.backends.fly_config.FlyConfig.from_env")
+    @patch("hunter.backends.fly_api.httpx.Client")
+    def test_auto_selects_fly_when_env_set(self, mock_httpx, mock_from_env, monkeypatch):
         """Auto mode selects fly when FLY_APP_NAME is present."""
+        from hunter.backends.fly_config import FlyConfig
+        from hunter.backends.fly_control import FlyHunterController
+
         monkeypatch.setenv("FLY_APP_NAME", "test-app")
-        with pytest.raises(NotImplementedError, match="Fly.io backend"):
-            create_controller(mode="auto")
+        mock_from_env.return_value = FlyConfig(
+            fly_api_token="tok", hunter_app_name="app",
+            github_pat="pat", hunter_repo="user/repo",
+            machine_image="img:latest",
+        )
+
+        controller = create_controller(mode="auto")
+        assert isinstance(controller, FlyHunterController)
 
 
 class TestCreateControllerFly:
-    """Fly.io backend is not yet implemented."""
+    """Fly.io backend returns a FlyHunterController."""
 
-    def test_fly_raises_not_implemented(self):
-        """mode='fly' raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="Fly.io backend"):
-            create_controller(mode="fly")
+    @patch("hunter.backends.fly_config.FlyConfig.from_env")
+    @patch("hunter.backends.fly_api.httpx.Client")
+    def test_fly_returns_fly_controller(self, mock_httpx, mock_from_env):
+        """mode='fly' returns a FlyHunterController."""
+        from hunter.backends.fly_config import FlyConfig
+        from hunter.backends.fly_control import FlyHunterController
+
+        mock_from_env.return_value = FlyConfig(
+            fly_api_token="tok", hunter_app_name="app",
+            github_pat="pat", hunter_repo="user/repo",
+            machine_image="img:latest",
+        )
+
+        controller = create_controller(mode="fly")
+        assert isinstance(controller, FlyHunterController)
+
+    @patch("hunter.backends.fly_config.FlyConfig.from_env")
+    @patch("hunter.backends.fly_api.httpx.Client")
+    def test_fly_passes_budget(self, mock_httpx, mock_from_env, mock_budget):
+        """Custom BudgetManager is passed through to FlyHunterController."""
+        from hunter.backends.fly_config import FlyConfig
+
+        mock_from_env.return_value = FlyConfig(
+            fly_api_token="tok", hunter_app_name="app",
+            github_pat="pat", hunter_repo="user/repo",
+            machine_image="img:latest",
+        )
+
+        controller = create_controller(mode="fly", budget=mock_budget)
+        assert controller.budget is mock_budget
 
 
 class TestCreateControllerInvalidMode:
@@ -179,6 +216,7 @@ class TestProtocolSatisfaction:
         from hunter.control import HunterController
         required_methods = [
             "spawn", "kill", "redeploy", "get_status", "get_logs",
+            "inject", "interrupt",
         ]
         for method in required_methods:
             assert hasattr(HunterController, method), f"Missing method: {method}"

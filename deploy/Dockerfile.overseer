@@ -1,0 +1,35 @@
+FROM python:3.11-slim
+
+# System deps
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# ttyd binary (architecture-aware)
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${ARCH}" \
+      -o /usr/local/bin/ttyd && \
+    chmod +x /usr/local/bin/ttyd
+
+# Python deps (cached layer)
+COPY pyproject.toml /app/pyproject.toml
+WORKDIR /app
+RUN pip install --no-cache-dir -e ".[hunter]" 2>/dev/null || true
+
+# Full source
+COPY . /app
+RUN pip install --no-cache-dir -e ".[hunter]"
+
+# Environment
+ENV HERMES_HOME=/data/hermes
+
+# Git config
+RUN git config --global user.name "Hermes Overseer" && \
+    git config --global user.email "overseer@hermes-prime"
+
+# Entrypoint
+COPY deploy/overseer-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 8080
+CMD ["/usr/local/bin/entrypoint.sh"]

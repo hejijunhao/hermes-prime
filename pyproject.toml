@@ -79,7 +79,7 @@ hermes-agent = "run_agent:main"
 py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajectory_compressor", "toolset_distributions", "cli", "hermes_constants"]
 
 [tool.setuptools.packages.find]
-include = ["tools", "hermes_cli", "gateway", "cron", "honcho_integration", "hunter", "hunter.tools"]
+include = ["tools", "hermes_cli", "gateway", "cron", "honcho_integration", "hunter", "hunter.tools", "hunter.backends", "hunter.prompts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

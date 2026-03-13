@@ -91,13 +91,12 @@ _VALID_PRIORITIES = set(_PRIORITY_PREFIXES.keys())
 # =============================================================================
 
 def _handle_hunter_inject(args: dict, **kwargs) -> str:
-    """Write an instruction to the injection file for the Hunter to pick up.
+    """Inject a runtime instruction into the Hunter via the controller.
 
-    The Hunter's step_callback reads this file on its next iteration,
-    renames it to .consumed, and appends the content to its ephemeral
-    system prompt.
+    The controller's ``inject()`` method handles the IPC mechanism
+    (file-based for local, Elephantasm for remote).
     """
-    from hunter.config import get_injection_path
+    controller = _get_controller()
 
     instruction = args.get("instruction", "")
     if not instruction:
@@ -109,17 +108,10 @@ def _handle_hunter_inject(args: dict, **kwargs) -> str:
             "error": f"Invalid priority '{priority}'. Must be one of: {sorted(_VALID_PRIORITIES)}"
         })
 
-    # Build content with priority prefix
-    prefix = _PRIORITY_PREFIXES[priority]
-    content = f"{prefix}{instruction}"
-
-    # Write to injection file
-    injection_path = get_injection_path()
     try:
-        injection_path.parent.mkdir(parents=True, exist_ok=True)
-        injection_path.write_text(content, encoding="utf-8")
+        controller.inject(instruction, priority)
     except OSError as e:
-        return json.dumps({"error": f"Failed to write injection file: {e}"})
+        return json.dumps({"error": f"Failed to inject: {e}"})
 
     # Best-effort Elephantasm logging
     _extract_overseer_event(
@@ -135,26 +127,23 @@ def _handle_hunter_inject(args: dict, **kwargs) -> str:
 
 
 def _handle_hunter_interrupt(args: dict, **kwargs) -> str:
-    """Signal the Hunter to stop gracefully via the interrupt flag file.
+    """Signal the Hunter to stop gracefully.
 
-    Writes the interrupt flag, waits up to 30s for the Hunter to exit
-    via its step_callback, then falls back to force-kill.
+    Uses the controller's ``interrupt()`` method (file-based for local,
+    machine stop for remote), then waits for graceful exit before
+    falling back to force-kill.
     """
-    from hunter.config import get_interrupt_flag_path
-
     controller = _get_controller()
     message = args.get("message", "Overseer requested interrupt.")
 
     if not controller.is_running:
         return json.dumps({"status": "no_hunter_running"})
 
-    # Write interrupt flag (the Hunter's step_callback checks this)
-    flag_path = get_interrupt_flag_path()
+    # Signal interrupt via the controller
     try:
-        flag_path.parent.mkdir(parents=True, exist_ok=True)
-        flag_path.write_text(message, encoding="utf-8")
+        controller.interrupt()
     except OSError as e:
-        return json.dumps({"error": f"Failed to write interrupt flag: {e}"})
+        return json.dumps({"error": f"Failed to signal interrupt: {e}"})
 
     # Wait for graceful exit, then force-kill
     current = controller.current

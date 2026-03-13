@@ -59,21 +59,15 @@ class TestGetController:
     """Lazy singleton initialisation."""
 
     def test_creates_controller_on_first_call(self):
-        """_get_controller lazily creates a HunterController with default managers."""
+        """_get_controller lazily creates a controller via the factory."""
         import hunter.tools.inject_tools as mod
 
-        mock_wt = MagicMock()
-        mock_bm = MagicMock()
-        mock_hc = MagicMock()
+        mock_ctrl = MagicMock()
 
-        with patch("hunter.worktree.WorktreeManager", return_value=mock_wt) as PWT, \
-             patch("hunter.budget.BudgetManager", return_value=mock_bm) as PBM, \
-             patch("hunter.control.HunterController", return_value=mock_hc) as PHC:
+        with patch("hunter.backends.create_controller", return_value=mock_ctrl) as factory:
             result = mod._get_controller()
-            assert result is mock_hc
-            PWT.assert_called_once()
-            PBM.assert_called_once()
-            PHC.assert_called_once_with(worktree=mock_wt, budget=mock_bm)
+            assert result is mock_ctrl
+            factory.assert_called_once()
 
     def test_returns_same_instance_on_second_call(self, mock_controller):
         """Subsequent calls return the cached singleton."""
@@ -100,10 +94,9 @@ class TestGetController:
 class TestHunterInject:
     """hunter_inject tool handler."""
 
-    def test_inject_normal_priority(self):
-        """Inject with default (normal) priority writes instruction as-is."""
+    def test_inject_normal_priority(self, mock_controller):
+        """Inject with default (normal) priority calls controller.inject()."""
         from hunter.tools.inject_tools import _handle_hunter_inject
-        from hunter.config import get_injection_path
 
         result = json.loads(_handle_hunter_inject({
             "instruction": "Focus on SQL injection in /api/users"
@@ -112,15 +105,13 @@ class TestHunterInject:
         assert result["status"] == "injected"
         assert result["priority"] == "normal"
         assert result["instruction_length"] == len("Focus on SQL injection in /api/users")
+        mock_controller.inject.assert_called_once_with(
+            "Focus on SQL injection in /api/users", "normal",
+        )
 
-        # Verify file content
-        content = get_injection_path().read_text(encoding="utf-8")
-        assert content == "Focus on SQL injection in /api/users"
-
-    def test_inject_high_priority(self):
-        """Inject with high priority adds prefix."""
+    def test_inject_high_priority(self, mock_controller):
+        """Inject with high priority passes priority to controller."""
         from hunter.tools.inject_tools import _handle_hunter_inject
-        from hunter.config import get_injection_path
 
         result = json.loads(_handle_hunter_inject({
             "instruction": "Check IDOR on invoice API",
@@ -129,14 +120,13 @@ class TestHunterInject:
 
         assert result["status"] == "injected"
         assert result["priority"] == "high"
+        mock_controller.inject.assert_called_once_with(
+            "Check IDOR on invoice API", "high",
+        )
 
-        content = get_injection_path().read_text(encoding="utf-8")
-        assert content == "HIGH PRIORITY: Check IDOR on invoice API"
-
-    def test_inject_critical_priority(self):
-        """Inject with critical priority adds drop-task prefix."""
+    def test_inject_critical_priority(self, mock_controller):
+        """Inject with critical priority passes priority to controller."""
         from hunter.tools.inject_tools import _handle_hunter_inject
-        from hunter.config import get_injection_path
 
         result = json.loads(_handle_hunter_inject({
             "instruction": "Stop analysis, target is out of scope",
@@ -145,12 +135,11 @@ class TestHunterInject:
 
         assert result["status"] == "injected"
         assert result["priority"] == "critical"
+        mock_controller.inject.assert_called_once_with(
+            "Stop analysis, target is out of scope", "critical",
+        )
 
-        content = get_injection_path().read_text(encoding="utf-8")
-        assert content.startswith("CRITICAL")
-        assert "Stop analysis, target is out of scope" in content
-
-    def test_inject_missing_instruction(self):
+    def test_inject_missing_instruction(self, mock_controller):
         """Inject without instruction returns error."""
         from hunter.tools.inject_tools import _handle_hunter_inject
 
@@ -158,14 +147,14 @@ class TestHunterInject:
         assert "error" in result
         assert "instruction" in result["error"].lower()
 
-    def test_inject_empty_instruction(self):
+    def test_inject_empty_instruction(self, mock_controller):
         """Inject with empty instruction returns error."""
         from hunter.tools.inject_tools import _handle_hunter_inject
 
         result = json.loads(_handle_hunter_inject({"instruction": ""}))
         assert "error" in result
 
-    def test_inject_invalid_priority(self):
+    def test_inject_invalid_priority(self, mock_controller):
         """Inject with invalid priority returns error."""
         from hunter.tools.inject_tools import _handle_hunter_inject
 
@@ -177,35 +166,21 @@ class TestHunterInject:
         assert "error" in result
         assert "urgent" in result["error"]
 
-    def test_inject_creates_parent_dirs(self):
-        """Inject creates the injections directory if it doesn't exist."""
+    def test_inject_handles_os_error(self, mock_controller):
+        """Inject returns error if controller.inject() raises OSError."""
         from hunter.tools.inject_tools import _handle_hunter_inject
-        from hunter.config import get_injection_path
 
-        # The _isolate_hermes_home fixture gives us a clean dir
-        injection_path = get_injection_path()
-        assert not injection_path.parent.exists()
+        mock_controller.inject.side_effect = OSError("disk full")
 
         result = json.loads(_handle_hunter_inject({
             "instruction": "test directive"
         }))
 
-        assert result["status"] == "injected"
-        assert injection_path.exists()
-
-    def test_inject_overwrites_previous_injection(self):
-        """A new injection replaces any unconsumed previous injection."""
-        from hunter.tools.inject_tools import _handle_hunter_inject
-        from hunter.config import get_injection_path
-
-        _handle_hunter_inject({"instruction": "first instruction"})
-        _handle_hunter_inject({"instruction": "second instruction"})
-
-        content = get_injection_path().read_text(encoding="utf-8")
-        assert content == "second instruction"
+        assert "error" in result
+        assert "disk full" in result["error"]
 
     @patch("hunter.tools.inject_tools._extract_overseer_event")
-    def test_inject_calls_elephantasm(self, mock_extract):
+    def test_inject_calls_elephantasm(self, mock_extract, mock_controller):
         """Inject calls _extract_overseer_event for memory logging."""
         from hunter.tools.inject_tools import _handle_hunter_inject
 
@@ -284,10 +259,9 @@ class TestHunterInterrupt:
 
         assert result["message"] == "Overseer requested interrupt."
 
-    def test_interrupt_writes_flag_file(self, mock_controller, mock_process):
-        """Interrupt writes the interrupt flag file."""
+    def test_interrupt_calls_controller_interrupt(self, mock_controller, mock_process):
+        """Interrupt delegates to controller.interrupt()."""
         from hunter.tools.inject_tools import _handle_hunter_interrupt
-        from hunter.config import get_interrupt_flag_path
 
         mock_controller.is_running = True
         mock_controller.current = mock_process
@@ -295,9 +269,7 @@ class TestHunterInterrupt:
 
         _handle_hunter_interrupt({"message": "test interrupt"})
 
-        flag_path = get_interrupt_flag_path()
-        assert flag_path.exists()
-        assert flag_path.read_text(encoding="utf-8") == "test interrupt"
+        mock_controller.interrupt.assert_called_once()
 
     def test_interrupt_current_becomes_none(self, mock_controller):
         """Interrupt handles race where current becomes None after is_running check."""
@@ -454,7 +426,7 @@ class TestToolRegistration:
 class TestDispatchIntegration:
     """Verify tools work through the registry dispatch path."""
 
-    def test_dispatch_hunter_inject(self):
+    def test_dispatch_hunter_inject(self, mock_controller):
         """registry.dispatch('hunter_inject', ...) calls the handler."""
         from tools.registry import registry
 
