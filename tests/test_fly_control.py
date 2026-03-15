@@ -24,7 +24,7 @@ def fly_config():
     return FlyConfig(
         fly_api_token="tok",
         hunter_app_name="test-hunter-app",
-        github_pat="ghp_test",
+        github_auth=MagicMock(get_token=MagicMock(return_value="ghs_test")),
         hunter_repo="user/hunter",
         machine_image="registry.fly.io/hunter:latest",
         elephantasm_api_key="elk-key",

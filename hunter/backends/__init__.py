@@ -75,7 +75,7 @@ def create_controller(
         worktree = FlyWorktreeManager(
             repo_url=config.hunter_repo,
             clone_path=Path("/data/hunter-repo"),
-            github_pat=config.github_pat,
+            github_auth=config.github_auth,
         )
         if budget is None:
             from hunter.budget import BudgetManager

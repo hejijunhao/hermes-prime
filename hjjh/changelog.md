@@ -1,5 +1,6 @@
 # Hermes Prime — Changelog
 
+- **6.0.0** — First live deployment: Fly apps created (Crimson Sun Technologies org), GitHub App auth replacing static PAT, anima ID env var support, deployed to Singapore (`sin`) with ttyd browser terminal
 - **5.1.0** — Post-Phase-D cleanup: 14 code-review issues fixed (resource leaks, partial clone cleanup, Dockerfile hardening, credential exposure, supply-chain risk, version pinning, stale cache, silent exceptions, type annotations)
 - **5.0.0** — Bootstrap mode: empty-repo detection, bootstrap prompt injection, architecture seeding via Elephantasm, testing target list, automatic transition to normal mode
 - **4.1.0** — Pre-Phase-D hardening: retry logic in Fly API client, bounded history, TTL cache for `is_running`, clone verification in Hunter entrypoint
@@ -17,6 +18,71 @@
 - **1.2.0** — Elephantasm memory integration: `AnimaManager`, `OverseerMemoryBridge`, `HunterMemoryBridge`
 - **1.1.0** — Phase 1 foundation: package scaffolding, budget system, worktree manager, process controller
 - **1.0.0** — Foundation fork of Hermes Agent + architecture design
+
+---
+
+## 6.0.0 — First Live Deployment
+
+**Date:** 2026-03-15
+
+Hermes Prime deployed to Fly.io for the first time. Two Fly apps created under the Crimson Sun Technologies org. Static `GITHUB_PAT` replaced with GitHub App auto-rotating tokens. Elephantasm anima IDs now configurable via environment variables. Overseer running in Singapore with browser terminal access via ttyd.
+
+### Infrastructure Setup
+
+- **Fly apps created:** `hermes-prime` (Overseer) and `hermes-prime-hunter` (Hunter) under `crimson-sun-technologies` org
+- **Deploy token:** Scoped to `hermes-prime-hunter` only (blast radius limited to ephemeral Hunter machines)
+- **Region:** Singapore (`sin`) — 1 shared CPU, 1024MB RAM, 10GB persistent volume
+- **Hunter repo:** `kaminocorp/hermes-prime-hunter` (empty, populated autonomously by the Overseer)
+- **10 Fly secrets configured:** `FLY_API_TOKEN`, `HUNTER_FLY_APP`, `HUNTER_REPO`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_INSTALLATION_ID`, `ELEPHANTASM_API_KEY`, `OVERSEER_ANIMA_ID`, `OPENROUTER_API_KEY`, `AUTH_PASSWORD`
+
+### GitHub App Auth (replaces GITHUB_PAT)
+
+Static Personal Access Tokens expire and require manual rotation. GitHub App tokens auto-rotate every ~55 minutes with no human intervention.
+
+- **GitHub App:** `hermes-prime-overseer` installed on `kaminocorp/hermes-prime-hunter` only, with Contents (R/W) + Metadata (R) permissions
+- **New module:** `hunter/backends/github_auth.py` — `GitHubAppAuth` class handles JWT signing → installation token exchange with in-memory caching and 5-minute pre-expiry refresh
+- **`FlyConfig`:** `github_pat: str` field replaced with `github_auth: GitHubAppAuth`; `to_machine_config()` generates a fresh token per Hunter machine (passed as `GITHUB_PAT` — the Hunter doesn't need to know it came from a GitHub App)
+- **`FlyWorktreeManager`:** Replaced static PAT URL with `_authenticated_url()` that gets a fresh token on each clone/pull/push; `_update_remote_url()` refreshes the git remote before network operations
+- **Hunter machines unchanged:** Entrypoint still reads `GITHUB_PAT` env var; the Overseer generates a fresh 1-hour token for each ephemeral machine
+
+### Elephantasm Anima ID Env Var Support
+
+Anima IDs were previously only stored in a local JSON cache. Now configurable via env vars for cleaner deployment configuration.
+
+- **`hunter/config.py`:** Added `OVERSEER_ANIMA_ID` and `HUNTER_ANIMA_ID` env var constants + `_ANIMA_ENV_MAP` lookup
+- **`hunter/memory.py`:** `get_anima_id()` resolution order: env var → local JSON cache. `ensure_animas()` merges env var overrides before checking completeness
+
+### Deployment Fixes
+
+Several issues discovered and fixed during first deployment:
+
+- **Deploy script app name:** Changed from `hermes-prime-overseer` to `hermes-prime` in `scripts/deploy-overseer.sh` and `deploy/fly.overseer.toml`
+- **Dockerfile path resolution:** `fly deploy --config deploy/fly.*.toml` resolves Dockerfile paths relative to the config file's directory. Fixed by changing `dockerfile = "deploy/Dockerfile.*"` to `dockerfile = "Dockerfile.*"` in both toml files. Added `PROJECT_ROOT` resolution to the deploy script.
+- **ttyd download URL:** `dpkg --print-architecture` returns `amd64` but ttyd assets use `x86_64`. Changed to `uname -m` in `Dockerfile.overseer`.
+- **ttyd auth format:** `--credential file:/path` not supported in ttyd 1.7.7. Changed to `--credential hermes:${AUTH_PASSWORD}` inline in `overseer-entrypoint.sh`.
+
+### Files changed
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `hunter/backends/github_auth.py` | **Created** | GitHub App JWT → installation token exchange |
+| `hunter/backends/fly_config.py` | Modified | `github_pat` → `github_auth: GitHubAppAuth` |
+| `hunter/backends/fly_worktree.py` | Modified | Token-refreshing authenticated URLs |
+| `hunter/backends/__init__.py` | Modified | Pass `github_auth` to `FlyWorktreeManager` |
+| `hunter/config.py` | Modified | Anima ID env var constants + mapping |
+| `hunter/memory.py` | Modified | Env var resolution in `get_anima_id()` and `ensure_animas()` |
+| `deploy/fly.overseer.toml` | Modified | App name → `hermes-prime`, region → `sin`, Dockerfile path fix, VM size → `shared-cpu-1x` |
+| `deploy/fly.hunter.toml` | Modified | Dockerfile path fix |
+| `deploy/Dockerfile.overseer` | Modified | ttyd download: `dpkg --print-architecture` → `uname -m` |
+| `deploy/overseer-entrypoint.sh` | Modified | Inline credential auth (removed `file:` prefix) |
+| `scripts/deploy-overseer.sh` | Modified | App name, `PROJECT_ROOT` resolution, absolute config paths |
+| `tests/test_fly_config.py` | Modified | Mock `GitHubAppAuth` instead of string PAT |
+| `tests/test_fly_worktree.py` | Modified | Mock auth, updated URL assertions |
+| `tests/test_fly_control.py` | Modified | Mock auth in `FlyConfig` fixture |
+| `tests/test_hunter_backends.py` | Modified | Mock auth in factory tests |
+| `tests/test_hunter_memory.py` | Modified | `_clean_anima_env` autouse fixture |
+
+**Tests:** 131 affected tests passing (zero regressions).
 
 ---
 

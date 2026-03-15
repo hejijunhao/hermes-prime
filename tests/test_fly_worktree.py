@@ -6,7 +6,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 from hunter.backends.fly_worktree import FlyWorktreeManager
+from hunter.backends.github_auth import GitHubAppAuth
 from hunter.worktree import WorktreeError
+
+
+def _mock_github_auth(token="ghs_mock_token"):
+    auth = MagicMock(spec=GitHubAppAuth)
+    auth.get_token.return_value = token
+    return auth
 
 
 @pytest.fixture
@@ -20,7 +27,7 @@ def fly_wt(clone_path):
     return FlyWorktreeManager(
         repo_url="user/hermes-hunter",
         clone_path=clone_path,
-        github_pat="ghp_test123",
+        github_auth=_mock_github_auth("ghp_test123"),
     )
 
 
@@ -32,12 +39,14 @@ class TestInit:
         assert fly_wt.repo_root == clone_path
 
     def test_builds_authenticated_url(self, fly_wt):
-        assert "ghp_test123@github.com" in fly_wt._repo_url
-        assert fly_wt._repo_url.endswith(".git")
+        url = fly_wt._authenticated_url()
+        assert "ghp_test123@github.com" in url
+        assert url.endswith(".git")
 
-    def test_safe_url_redacts_pat(self, fly_wt):
-        assert "ghp_test123" not in fly_wt._safe_url()
-        assert "***" in fly_wt._safe_url()
+    def test_safe_url_redacts_credentials(self, fly_wt):
+        safe = fly_wt._safe_url()
+        assert "ghp_test123" not in safe
+        assert "***" in safe
 
 
 class TestSetup:
@@ -162,7 +171,10 @@ class TestPush:
     def test_pushes_to_origin(self, _is_setup, mock_run_git, fly_wt):
         mock_run_git.return_value = MagicMock(returncode=0)
         fly_wt.push()
-        mock_run_git.assert_called_with("push", "origin", "main")
+        # Should update remote URL then push
+        calls = mock_run_git.call_args_list
+        assert any("set-url" in str(c) for c in calls)
+        assert any(c == call("push", "origin", "main") for c in calls)
 
     def test_raises_if_not_setup(self, fly_wt):
         with pytest.raises(WorktreeError, match="not set up"):

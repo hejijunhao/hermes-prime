@@ -6,7 +6,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # ttyd binary (architecture-aware)
-RUN ARCH=$(dpkg --print-architecture) && \
+RUN ARCH=$(uname -m) && \
     curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${ARCH}" \
       -o /usr/local/bin/ttyd && \
     chmod +x /usr/local/bin/ttyd

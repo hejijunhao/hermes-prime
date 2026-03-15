@@ -106,6 +106,16 @@ HUNTER_MAX_ITERATIONS = 200
 OVERSEER_ANIMA_NAME = "hermes-prime"
 HUNTER_ANIMA_NAME = "hermes-prime-hunter"
 
+# Env var overrides — if set, skip cache lookup entirely.
+OVERSEER_ANIMA_ID_ENV = "OVERSEER_ANIMA_ID"
+HUNTER_ANIMA_ID_ENV = "HUNTER_ANIMA_ID"
+
+# Map anima names → env var names for lookup.
+_ANIMA_ENV_MAP: dict[str, str] = {
+    OVERSEER_ANIMA_NAME: OVERSEER_ANIMA_ID_ENV,
+    HUNTER_ANIMA_NAME: HUNTER_ANIMA_ID_ENV,
+}
+
 
 # =============================================================================
 # Overseer

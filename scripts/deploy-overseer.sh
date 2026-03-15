@@ -4,8 +4,12 @@ set -euo pipefail
 # One-command Fly.io deployment for Hermes Prime.
 # Usage: ./scripts/deploy-overseer.sh
 
-OVERSEER_APP="hermes-prime-overseer"
+OVERSEER_APP="hermes-prime"
 HUNTER_APP="hermes-prime-hunter"
+
+# Resolve project root (script is in scripts/)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # --- Prerequisites ---
 if ! command -v fly &>/dev/null; then
@@ -52,7 +56,7 @@ fi
 echo "Building and pushing Hunter image..."
 fly deploy \
     --app "$HUNTER_APP" \
-    --config deploy/fly.hunter.toml \
+    --config "$PROJECT_ROOT/deploy/fly.hunter.toml" \
     --build-only \
     --push
 
@@ -68,7 +72,7 @@ fly secrets set \
 echo "Deploying Overseer..."
 fly deploy \
     --app "$OVERSEER_APP" \
-    --config deploy/fly.overseer.toml
+    --config "$PROJECT_ROOT/deploy/fly.overseer.toml"
 
 # --- Done ---
 OVERSEER_URL=$(fly apps list --json | python3 -c "

@@ -6,12 +6,14 @@ This module keeps environment-reading logic out of the API client and controller
 
 import os
 from dataclasses import dataclass, field
+from typing import Optional
+
+from hunter.backends.github_auth import GitHubAppAuth
 
 
 _REQUIRED_VARS = {
     "FLY_API_TOKEN": "Fly Machines API authentication token",
     "HUNTER_FLY_APP": "Fly app name for the Hunter machine (e.g. 'hermes-prime-hunter')",
-    "GITHUB_PAT": "GitHub personal access token with repo scope",
     "HUNTER_REPO": "GitHub repo for the Hunter (e.g. 'user/hermes-prime-hunter')",
     "HUNTER_FLY_IMAGE": "Docker image reference for the Hunter machine",
     "ELEPHANTASM_API_KEY": "Elephantasm API key for cross-machine memory",
@@ -31,7 +33,7 @@ class FlyConfig:
     hunter_app_name: str
 
     # GitHub
-    github_pat: str
+    github_auth: GitHubAppAuth
     hunter_repo: str
 
     # Hunter machine spec
@@ -66,7 +68,7 @@ class FlyConfig:
         return cls(
             fly_api_token=os.environ["FLY_API_TOKEN"],
             hunter_app_name=os.environ["HUNTER_FLY_APP"],
-            github_pat=os.environ["GITHUB_PAT"],
+            github_auth=GitHubAppAuth.from_env(),
             hunter_repo=os.environ["HUNTER_REPO"],
             machine_image=os.environ["HUNTER_FLY_IMAGE"],
             machine_cpu_kind=os.environ.get("HUNTER_FLY_CPU_KIND", "shared"),
@@ -101,7 +103,7 @@ class FlyConfig:
             "ELEPHANTASM_API_KEY": self.elephantasm_api_key,
             "OPENROUTER_API_KEY": self.openrouter_api_key,
             "HUNTER_REPO": self.hunter_repo,
-            "GITHUB_PAT": self.github_pat,
+            "GITHUB_PAT": self.github_auth.get_token(),
         }
         if instruction:
             env["HUNTER_INSTRUCTION"] = instruction

@@ -1,8 +1,8 @@
-app = "hermes-prime-overseer"
-primary_region = "sjc"
+app = "hermes-prime"
+primary_region = "sin"
 
 [build]
-  dockerfile = "deploy/Dockerfile.overseer"
+  dockerfile = "Dockerfile.overseer"
 
 [http_service]
   internal_port = 8080
@@ -16,5 +16,5 @@ primary_region = "sjc"
   destination = "/data"
 
 [[vm]]
-  size = "shared-cpu-2x"
+  size = "shared-cpu-1x"
   memory = "1024mb"

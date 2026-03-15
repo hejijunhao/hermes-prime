@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from typing import Any, Optional
 from hunter.config import (
     HUNTER_ANIMA_NAME,
     OVERSEER_ANIMA_NAME,
+    _ANIMA_ENV_MAP,
     get_anima_cache_path,
 )
 
@@ -122,10 +124,18 @@ class AnimaManager:
         cache_path = cache_path or get_anima_cache_path()
         cached = AnimaManager._load_cache(cache_path)
 
-        # If cache already has both, return early
+        # Merge env-var overrides into the cached map
+        for name, _ in AnimaManager._ANIMA_DEFS:
+            env_key = _ANIMA_ENV_MAP.get(name)
+            if env_key:
+                env_val = os.environ.get(env_key)
+                if env_val:
+                    cached[name] = env_val
+
+        # If all animas are resolved, return early
         names_needed = {name for name, _ in AnimaManager._ANIMA_DEFS}
         if names_needed <= set(cached.keys()):
-            logger.debug("Anima cache hit — both Animas present")
+            logger.debug("All Anima IDs resolved (env/cache)")
             return cached
 
         if not _HAS_ELEPHANTASM:
@@ -155,7 +165,16 @@ class AnimaManager:
 
     @staticmethod
     def get_anima_id(name: str, cache_path: Optional[Path] = None) -> Optional[str]:
-        """Look up an Anima ID by name from the local cache."""
+        """Look up an Anima ID by name.
+
+        Resolution order: env var (``OVERSEER_ANIMA_ID`` /
+        ``HUNTER_ANIMA_ID``) → local JSON cache.
+        """
+        env_key = _ANIMA_ENV_MAP.get(name)
+        if env_key:
+            env_val = os.environ.get(env_key)
+            if env_val:
+                return env_val
         cache_path = cache_path or get_anima_cache_path()
         cached = AnimaManager._load_cache(cache_path)
         return cached.get(name)

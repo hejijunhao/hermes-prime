@@ -97,7 +97,7 @@ class TestCreateControllerAuto:
         monkeypatch.setenv("FLY_APP_NAME", "test-app")
         mock_from_env.return_value = FlyConfig(
             fly_api_token="tok", hunter_app_name="app",
-            github_pat="pat", hunter_repo="user/repo",
+            github_auth=MagicMock(get_token=MagicMock(return_value="ghs_test")), hunter_repo="user/repo",
             machine_image="img:latest",
         )
 
@@ -117,7 +117,7 @@ class TestCreateControllerFly:
 
         mock_from_env.return_value = FlyConfig(
             fly_api_token="tok", hunter_app_name="app",
-            github_pat="pat", hunter_repo="user/repo",
+            github_auth=MagicMock(get_token=MagicMock(return_value="ghs_test")), hunter_repo="user/repo",
             machine_image="img:latest",
         )
 
@@ -132,7 +132,7 @@ class TestCreateControllerFly:
 
         mock_from_env.return_value = FlyConfig(
             fly_api_token="tok", hunter_app_name="app",
-            github_pat="pat", hunter_repo="user/repo",
+            github_auth=MagicMock(get_token=MagicMock(return_value="ghs_test")), hunter_repo="user/repo",
             machine_image="img:latest",
         )
 

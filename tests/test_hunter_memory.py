@@ -57,6 +57,12 @@ def _make_hunter_bridge(mock_client):
 
 class TestAnimaManager:
 
+    @pytest.fixture(autouse=True)
+    def _clean_anima_env(self, monkeypatch):
+        """Ensure anima env vars don't leak into cache-based tests."""
+        monkeypatch.delenv("OVERSEER_ANIMA_ID", raising=False)
+        monkeypatch.delenv("HUNTER_ANIMA_ID", raising=False)
+
     def test_ensure_animas_creates_both(self, anima_cache):
         """ensure_animas() creates both Animas and caches their IDs."""
         from hunter.memory import AnimaManager

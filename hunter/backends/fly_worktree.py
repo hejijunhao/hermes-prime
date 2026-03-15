@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import List
 
+from hunter.backends.github_auth import GitHubAppAuth
 from hunter.worktree import CommitInfo, WorktreeError, WorktreeManager
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class FlyWorktreeManager(WorktreeManager):
     Only overrides initialisation, setup/teardown, and push.
     """
 
-    def __init__(self, repo_url: str, clone_path: Path, github_pat: str):
+    def __init__(self, repo_url: str, clone_path: Path, github_auth: GitHubAppAuth):
         """Initialise without calling ``super().__init__()``.
 
         We set up paths differently — there's no repo root or worktree
@@ -40,11 +41,10 @@ class FlyWorktreeManager(WorktreeManager):
         Args:
             repo_url: GitHub repo (e.g. ``"user/hermes-prime-hunter"``).
             clone_path: Where to clone locally (e.g. ``Path("/data/hunter-repo")``).
-            github_pat: GitHub personal access token for clone/push.
+            github_auth: GitHub App auth for token generation.
         """
-        # Authenticated HTTPS URL
-        self._repo_url = f"https://{github_pat}@github.com/{repo_url}.git"
-        self._github_pat = github_pat
+        self._bare_repo_url = repo_url
+        self._github_auth = github_auth
 
         # Set attributes that WorktreeManager methods expect
         self.worktree_path = clone_path
@@ -56,16 +56,18 @@ class FlyWorktreeManager(WorktreeManager):
     def setup(self) -> None:
         """Clone the repo if not present, pull if it exists."""
         if self.is_setup():
-            # Already cloned — pull latest
+            # Already cloned — update remote URL (token may have rotated)
+            self._update_remote_url()
             logger.info("Clone exists at %s — pulling latest", self.worktree_path)
             self._run_git("pull", "--ff-only", "origin", self.branch)
         else:
             # Fresh clone
             self.worktree_path.parent.mkdir(parents=True, exist_ok=True)
+            repo_url = self._authenticated_url()
             logger.info("Cloning %s to %s", self._safe_url(), self.worktree_path)
             try:
                 subprocess.run(
-                    ["git", "clone", self._repo_url, str(self.worktree_path)],
+                    ["git", "clone", repo_url, str(self.worktree_path)],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -111,14 +113,24 @@ class FlyWorktreeManager(WorktreeManager):
     def push(self) -> None:
         """Push committed changes to the remote Hunter repo."""
         self._require_setup()
+        self._update_remote_url()
         self._run_git("push", "origin", self.branch)
         logger.info("Pushed to remote Hunter repo")
 
     # ── Internal helpers ─────────────────────────────────────────────────
 
+    def _authenticated_url(self) -> str:
+        """Build an HTTPS URL with a fresh installation token."""
+        token = self._github_auth.get_token()
+        return f"https://x-access-token:{token}@github.com/{self._bare_repo_url}.git"
+
+    def _update_remote_url(self) -> None:
+        """Update the origin remote with a fresh token."""
+        self._run_git("remote", "set-url", "origin", self._authenticated_url())
+
     def _safe_url(self) -> str:
-        """Return the repo URL with the PAT redacted for logging."""
-        return self._repo_url.replace(self._github_pat, "***")
+        """Return the repo URL with credentials redacted for logging."""
+        return f"https://***@github.com/{self._bare_repo_url}.git"
 
     def _require_setup(self) -> None:
         """Raise if the clone isn't set up."""
